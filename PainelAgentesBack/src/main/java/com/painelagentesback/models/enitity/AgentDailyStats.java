@@ -26,11 +26,14 @@ public class AgentDailyStats {
     @Column(name = "agent_name")
     private String agentName;
 
+    @Column(name = "agent_role")
+    private String agentRole;
+
     @Column(name = "date", nullable = false)
     private LocalDate date;
 
-    @Column(name = "chamadas_atendidas")
-    private int chamadasAtendidasTotal;
+    @Column(name = "chamadas_recebidas")
+    private int chamadasRecebidasTotal;
 
     @Column(name = "pausas_iniciadas")
     private int pausasIniciadasTotal;

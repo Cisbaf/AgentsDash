@@ -71,6 +71,12 @@
             <version>7.6.0</version>
             <scope>compile</scope>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-xml</artifactId>
+        </dependency>
+
+
 
         <dependency>
             <groupId>net.javacrumbs.shedlock</groupId>

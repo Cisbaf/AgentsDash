@@ -12,9 +12,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
+@ToString
 public class AgentStatus {
     private String id;
     private String nomeAgente;
+    private String agentRole;
+    private int chamadasRecebidasTotal;
     private int chamadasAtendidasTotal;
     private int pausasIniciadasTotal;
     private long tempoTotalPausaSegundos;

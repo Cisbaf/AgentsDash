@@ -14,20 +14,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @NoArgsConstructor
 @Builder
 public class GlobalMetrics {
-    private long totalChamadas;
-    private long chamadasAtendidas;
-    private long chamadasAbandonadas;       // Necessita lógica adicional
-    private long chamadasEmFila;             // Necessita lógica adicional
+    private long totalChamadasAtendidas;
+    private long totalchamadasRecebidas;
+    private long chamadasAbandonadas;
+    private long chamadasEmFila;
     private long tempoTotalToqueSegundosGlobal;
     private List<CallDetail> allCallDetails = new CopyOnWriteArrayList<>();
 
     // Métodos sincronizados para atualizações thread-safe
     public synchronized void incrementTotalChamadas() {
-        this.totalChamadas++;
-    }
-
-    public synchronized void incrementChamadasAtendidas() {
-        this.chamadasAtendidas++;
+        this.totalChamadasAtendidas++;
     }
 
     public synchronized void addCallDetails(String callerIdRAni, LocalDateTime timestamp) {
@@ -38,15 +34,11 @@ public class GlobalMetrics {
         this.tempoTotalToqueSegundosGlobal += seconds;
     }
 
-    public CallDetail getFirstCallDetails() {
-        return allCallDetails.isEmpty() ? null : allCallDetails.getFirst();
-    }
-
-    public CallDetail getLastCallDetails() {
-        return allCallDetails.isEmpty() ? null : allCallDetails.getLast();
-    }
-
     public List<CallDetail> getAllCallDetails() {
         return Collections.unmodifiableList(allCallDetails);
+    }
+
+    public synchronized void clearCallDetails() {
+        allCallDetails.clear();
     }
 }

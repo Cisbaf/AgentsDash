@@ -22,11 +22,11 @@ public class GlobalDailyStats {
     @Column(name = "date", nullable = false, unique = true)
     private LocalDate date;
 
-    @Column(name = "total_chamadas")
-    private long totalChamadas;
+    @Column(name = "total_atendidas")
+    private long totalChamadasAtendidas;
 
-    @Column(name = "chamadas_atendidas")
-    private long chamadasAtendidas;
+    @Column(name = "chamadas_recebidas")
+    private long totalchamadasRecebidas;
 
     @Column(name = "chamadas_abandonadas")
     private long chamadasAbandonadas;
