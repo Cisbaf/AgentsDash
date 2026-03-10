@@ -4,10 +4,12 @@ import com.painelagentesback.service.AgentClient;
 import com.painelagentesback.service.AgentStatusService;
 import com.painelagentesback.service.GlobalMetricsService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MonitoringScheduler {
@@ -32,7 +34,6 @@ public class MonitoringScheduler {
         }
     }
 
-    // Persistência a cada minuto
     @Scheduled(fixedRate = 10000)
     @SchedulerLock(name = "persistMetrics", lockAtLeastFor = "PT1M", lockAtMostFor = "PT2M")
     public void persistMetrics() {
