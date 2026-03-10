@@ -7,6 +7,7 @@ import com.painelagentesback.models.utils.AgentStatus;
 import com.painelagentesback.repository.AgentDailyStatsRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Service;
 
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AgentStatusService {
@@ -24,75 +26,118 @@ public class AgentStatusService {
     private final GlobalMetricsService globalMetricsService;
     private final AgentDailyStatsRepository agentStatsRepository;
 
-
     public void updateAgentStatus(AgentsApi dto) {
-        if (dto.getStatus() == 0) {
-            return;
-        }
+        if (dto.getStatus() == 0) return;
+
         AgentStatus agent = agents.computeIfAbsent(dto.getId(), k -> new AgentStatus());
 
         synchronized (agent) {
-            int previousStatusRamal = agent.getUltimoStatusRamal();
-            int currentStatusRamal = dto.getSTATUS_();
-            int previousStatusAcd = agent.getUltimoStatusAcd();
-            int currentStatusAcd = dto.getStatus();
-
-            agent.setId(dto.getId());
-            agent.setNomeAgente(dto.getNAgente());
-
-            // Atualiza métricas de tempo apenas se o agente estiver logado (status ACD = 1)
-            if (currentStatusAcd == 1) {
-                // Tempo em ligação (ramal = 1)
-                if (currentStatusRamal == 1) {
-                    agent.setTempoTotalLigacaoSegundos(agent.getTempoTotalLigacaoSegundos() + 1);
-                }
-                // Tempo livre (ramal = 0)
-                if (currentStatusRamal == 0) {
-                    agent.setTempoTotalLivreSegundos(agent.getTempoTotalLivreSegundos() + 1);
-                }
-
-                // Lógica para tempo de toque (ramal = 8)
-                if (currentStatusRamal == 8 && previousStatusRamal != 8) {
-                    agent.setRingingStartTime(LocalDateTime.now());
-                } else if (currentStatusRamal == 1 && previousStatusRamal == 8) {
-                    if (agent.getRingingStartTime() != null) {
-                        long ringingDuration = Duration.between(agent.getRingingStartTime(), LocalDateTime.now()).getSeconds();
-                        agent.setTempoTotalToqueSegundos(agent.getTempoTotalToqueSegundos() + ringingDuration);
-                        globalMetricsService.addTotalToqueSegundos(ringingDuration);
-                        agent.setRingingStartTime(null);
-                    }
-                } else if (currentStatusRamal != 8 && previousStatusRamal == 8) {
-                    agent.setRingingStartTime(null);   // parou de tocar sem atender
-                }
-
-                // Registro de chamadas quando entra em ligação
-                if (currentStatusRamal == 1 && previousStatusRamal != 1) {
-                    String callerId = dto.getCallerIdRAni();
-                    if (callerId != null && !callerId.isEmpty()) {
-                        globalMetricsService.addCallDetails(callerId, LocalDateTime.now());
-                        agent.getLigacoes().add(new CallDetail(callerId, LocalDateTime.now()));
-                    }
-                }
-            }
-            // Tempo em pausa (ACD = 5)
-            if (currentStatusAcd == 5) {
-                agent.setTempoTotalPausaSegundos(agent.getTempoTotalPausaSegundos() + 1);
-            }
-            if (currentStatusAcd == 6) {
-                agent.setRemovido(agent.getRemovido() + 1);
-            }
-            // Contagem de pausas iniciadas
-            if (currentStatusAcd == 5 && previousStatusAcd != 5) {
-                agent.setPausasIniciadasTotal(agent.getPausasIniciadasTotal() + 1);
-            }
-
-            // Chamadas atendidas totais (vindo do campo n_ch_acd)
-            agent.setChamadasAtendidasTotal(dto.getNChAcd());
-
-            // Atualiza últimos status
-            agent.setUltimoStatusAcd(currentStatusAcd);
-            agent.setUltimoStatusRamal(currentStatusRamal);
+            processStatusUpdate(agent, dto);
         }
+    }
+
+    private void processStatusUpdate(AgentStatus agent, AgentsApi dto) {
+        // Captura estados para comparação
+        int prevRamal = agent.getUltimoStatusRamal();
+        int currRamal = dto.getSTATUS_();
+        int prevAcd = agent.getUltimoStatusAcd();
+        int currAcd = dto.getStatus();
+        String callerId = dto.getCallerIdRAni();
+
+        globalMetricsService.contarChamadas();
+
+        // Atualização básica de perfil
+        agent.setId(dto.getId());
+        agent.setNomeAgente(dto.getNAgente());
+        agent.setAgentRole(defineAgentRole(dto.getId()));
+        agent.setChamadasRecebidasTotal(dto.getNChAcd());
+
+        // Processamento de Lógicas Específicas
+        contabilizarTemposContinuos(agent, currAcd, currRamal);
+        processarLogicaToque(agent, prevRamal, currRamal, callerId);
+        contabilizarContadoresEvento(agent, prevAcd, currAcd);
+
+        // Persistência de estado para próxima iteração
+        agent.setUltimoStatusAcd(currAcd);
+        agent.setUltimoStatusRamal(currRamal);
+
+        atualizarMetricasGlobais();
+    }
+
+    /**
+     * Calcula o incremento de tempo (1s) para os estados de Ligação, Livre ou Pausa.
+     */
+    private void contabilizarTemposContinuos(AgentStatus agent, int currAcd, int currRamal) {
+        if (currAcd == 1) { // Agente Logado/Ativo
+            if (currRamal == 1) agent.setTempoTotalLigacaoSegundos(agent.getTempoTotalLigacaoSegundos() + 1);
+            else if (currRamal == 0) agent.setTempoTotalLivreSegundos(agent.getTempoTotalLivreSegundos() + 1);
+        } else if (currAcd == 5) { // Agente em Pausa
+            agent.setTempoTotalPausaSegundos(agent.getTempoTotalPausaSegundos() + 1);
+        }
+    }
+
+    /**
+     * Gerencia o ciclo de vida do toque (Ringing).
+     * Identifica início, fim, atendimento ou remoção da chamada.
+     */
+    private void processarLogicaToque(AgentStatus agent, int prevRamal, int currRamal, String callerId) {
+        boolean iniciouToque = (currRamal == 8 && prevRamal != 8);
+        boolean parouToque = (prevRamal == 8 && currRamal != 8);
+
+        if (iniciouToque) {
+            agent.setRingingStartTime(LocalDateTime.now());
+            log.debug("[TRACK] Chamada {} começou a tocar para {}", callerId, agent.getNomeAgente());
+        } else if (parouToque) {
+            finalizarCicloToque(agent, currRamal, callerId);
+        }
+    }
+
+    private void finalizarCicloToque(AgentStatus agent, int currRamal, String callerId) {
+        LocalDateTime now = LocalDateTime.now();
+
+        // 1. Contabiliza tempo de toque
+        if (agent.getRingingStartTime() != null) {
+            long duration = Duration.between(agent.getRingingStartTime(), now).getSeconds();
+            agent.setTempoTotalToqueSegundos(agent.getTempoTotalToqueSegundos() + duration);
+            globalMetricsService.addTotalToqueSegundos(duration);
+        }
+
+        // 2. Determina o desfecho da chamada para o agente
+        if (callerId != null && !callerId.isEmpty()) {
+            if (currRamal == 1) { // Atendeu
+                globalMetricsService.registrarAtendimento(callerId);
+                globalMetricsService.addCallDetails(callerId, now);
+                agent.getLigacoes().add(new CallDetail(callerId, now));
+                log.debug("[TRACK-ATENDIMENTO] {} atendeu {}", agent.getNomeAgente(), callerId);
+            } else if (globalMetricsService.estaNaFila(callerId)) { // Removido (foi para outro agente)
+                agent.setRemovido(agent.getRemovido() + 1);
+                log.info("[TRACK-REMOVIDO] {} perdeu a chamada {}. Segue na fila.", agent.getNomeAgente(), callerId);
+            } else {
+                globalMetricsService.incrementChamadasAbandonadas();
+                log.info("[TRACK-ABANDONADA] {} perdeu a chamada {}. Saiu da fila.", agent.getNomeAgente(), callerId);
+            }
+        }
+        agent.setRingingStartTime(null);
+    }
+
+    private void contabilizarContadoresEvento(AgentStatus agent, int prevAcd, int currAcd) {
+        if (currAcd == 5 && prevAcd != 5) {
+            agent.setPausasIniciadasTotal(agent.getPausasIniciadasTotal() + 1);
+        }
+    }
+
+    private String defineAgentRole(String id) {
+        if (id == null || id.length() <= 11) return "MEDICO";
+        if (id.startsWith("1")) return "TARM";
+        if (id.startsWith("2")) return "FROTA";
+        return "OUTRO";
+    }
+
+    private void atualizarMetricasGlobais() {
+        long total = agents.values().stream()
+                .mapToLong(AgentStatus::getChamadasRecebidasTotal)
+                .sum();
+        globalMetricsService.addChamadasRecebidas(total);
     }
 
     public Map<String, AgentStatus> getAllAgentStatuses() {
@@ -107,11 +152,12 @@ public class AgentStatusService {
             AgentDailyStats stats = agentStatsRepository
                     .findByAgentIdAndDate(agent.getId(), today)
                     .orElse(new AgentDailyStats());
+
             if (agent.getUltimoStatusAcd() != 0) {
                 stats.setAgentId(agent.getId());
                 stats.setAgentName(agent.getNomeAgente());
                 stats.setDate(today);
-                stats.setChamadasAtendidasTotal(agent.getChamadasAtendidasTotal());
+                stats.setChamadasRecebidasTotal(agent.getChamadasRecebidasTotal());
                 stats.setPausasIniciadasTotal(agent.getPausasIniciadasTotal());
                 stats.setTempoTotalPausaSegundos(agent.getTempoTotalPausaSegundos());
                 stats.setTempoTotalLigacaoSegundos(agent.getTempoTotalLigacaoSegundos());
@@ -138,7 +184,7 @@ public class AgentStatusService {
         AgentStatus agent = new AgentStatus();
         agent.setId(stats.getAgentId());
         agent.setNomeAgente(stats.getAgentName());
-        agent.setChamadasAtendidasTotal(stats.getChamadasAtendidasTotal());
+        agent.setChamadasRecebidasTotal(stats.getChamadasRecebidasTotal());
         agent.setPausasIniciadasTotal(stats.getPausasIniciadasTotal());
         agent.setTempoTotalPausaSegundos(stats.getTempoTotalPausaSegundos());
         agent.setTempoTotalLigacaoSegundos(stats.getTempoTotalLigacaoSegundos());

@@ -1,36 +1,58 @@
 package com.painelagentesback.service;
 
-import com.painelagentesback.models.enitity.CallDetail;
 import com.painelagentesback.models.enitity.GlobalDailyStats;
+import com.painelagentesback.models.utils.FilaResponse;
 import com.painelagentesback.models.utils.GlobalMetrics;
-import com.painelagentesback.repository.CallDetailRepository;
 import com.painelagentesback.repository.GlobalDailyStatsRepository;
 import jakarta.transaction.Transactional;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class GlobalMetricsService {
     @Getter
     private final GlobalMetrics globalMetrics = new GlobalMetrics();
     private final GlobalDailyStatsRepository globalStatsRepository;
-    private final CallDetailRepository callDetailRepository;
-
+    private final FilaClient filaClient;
+    private final Set<String> uidsAnterioresNaFila = ConcurrentHashMap.newKeySet();
+    private final Map<String, LocalDateTime> atendimentosRecentes = new ConcurrentHashMap<>();
 
     public void addCallDetails(String callerIdRAni, LocalDateTime timestamp) {
         globalMetrics.addCallDetails(callerIdRAni, timestamp);
         globalMetrics.incrementTotalChamadas();
+        globalMetrics.setTotalChamadasAtendidas(globalMetrics.getAllCallDetails().size());
     }
 
     public void addTotalToqueSegundos(long seconds) {
         globalMetrics.addTotalToqueSegundos(seconds);
+    }
+
+    public synchronized void incrementChamadasAbandonadas() {
+        globalMetrics.setChamadasAbandonadas(globalMetrics.getChamadasAbandonadas() + 1);
+    }
+
+    public void addChamadasRecebidas(long chamada) {
+        globalMetrics.setTotalchamadasRecebidas(chamada);
+    }
+
+    void contarChamadas() {
+        FilaResponse response = filaClient.statusFilaSystem();
+        var size = 0;
+        if (response != null && response.getChamadas() != null && response.getChamadas().getItens() != null) {
+            size = response.getChamadas().getItens().size();
+        }
+        globalMetrics.setChamadasEmFila(size);
     }
 
     // Persiste o estado global no banco
@@ -41,23 +63,17 @@ public class GlobalMetricsService {
                 .findByDate(today)
                 .orElse(new GlobalDailyStats());
         stats.setDate(today);
-        stats.setTotalChamadas(globalMetrics.getTotalChamadas());
-        stats.setChamadasAtendidas(globalMetrics.getChamadasAtendidas());
+        stats.setTotalchamadasRecebidas(globalMetrics.getTotalchamadasRecebidas());
         stats.setChamadasAbandonadas(globalMetrics.getChamadasAbandonadas());
         stats.setChamadasEmFila(globalMetrics.getChamadasEmFila());
         stats.setTempoTotalToqueSegundosGlobal(globalMetrics.getTempoTotalToqueSegundosGlobal());
         stats.setUltimaAtualizacao(LocalDateTime.now());
+
         globalStatsRepository.save(stats);
 
-        // Persistir detalhes das chamadas (se necessário)
-        for (CallDetail call : globalMetrics.getAllCallDetails()) {
-            // Evitar duplicatas: pode-se verificar se já existe
-            CallDetail detail = new CallDetail();
-            detail.setCallerIdRAni(call.getCallerIdRAni());
-            detail.setTimestamp(call.getTimestamp());
-            detail.setDate(today);
-            callDetailRepository.save(detail);
-        }
+
+        stats.setTotalChamadasAtendidas(globalMetrics.getAllCallDetails().size());
+
         // Após persistir, podemos limpar a lista em memória se quisermos,
         // mas como mantemos para first/last, talvez não.
     }
@@ -68,29 +84,34 @@ public class GlobalMetricsService {
         LocalDate today = LocalDate.now();
         Optional<GlobalDailyStats> opt = globalStatsRepository.findByDate(today);
         opt.ifPresent(stats -> {
-            globalMetrics.setTotalChamadas(stats.getTotalChamadas());
-            globalMetrics.setChamadasAtendidas(stats.getChamadasAtendidas());
+            globalMetrics.setTotalchamadasRecebidas(stats.getTotalchamadasRecebidas());
             globalMetrics.setChamadasAbandonadas(stats.getChamadasAbandonadas());
             globalMetrics.setChamadasEmFila(stats.getChamadasEmFila());
             globalMetrics.setTempoTotalToqueSegundosGlobal(stats.getTempoTotalToqueSegundosGlobal());
             // Carregar detalhes das chamadas? Talvez não seja necessário se first/last forem consultados do banco
+            globalMetrics.setTotalChamadasAtendidas(stats.getTotalChamadasAtendidas());
         });
-
-        // Se quisermos carregar os detalhes das chamadas para ter first/last em memória,
-        // podemos buscar as do dia e preencher a lista.
-        List<CallDetail> calls = callDetailRepository.findByDateOrderByTimestampAsc(today);
-        for (CallDetail call : calls) {
-            globalMetrics.addCallDetails(call.getCallerIdRAni(), call.getTimestamp());
-        }
     }
 
     public void resetGlobalMetrics() {
-        globalMetrics.setTotalChamadas(0);
-        globalMetrics.setChamadasAtendidas(0);
+        globalMetrics.setTotalChamadasAtendidas(0);
+        globalMetrics.setTotalchamadasRecebidas(0);
         globalMetrics.setChamadasAbandonadas(0);
         globalMetrics.setChamadasEmFila(0);
         globalMetrics.setTempoTotalToqueSegundosGlobal(0);
-        globalMetrics.getAllCallDetails().clear();
+        globalMetrics.clearCallDetails();
+    }
+
+    // Métdo para ser chamado pelo AgentStatusService ao atender
+    public void registrarAtendimento(String uid) {
+        if (uid != null) {
+            atendimentosRecentes.put(uid, LocalDateTime.now());
+        }
+    }
+
+    // Métdo para o AgentStatusService verificar se a chamada continua na fila
+    public boolean estaNaFila(String uid) {
+        return uidsAnterioresNaFila.contains(uid);
     }
 }
 
