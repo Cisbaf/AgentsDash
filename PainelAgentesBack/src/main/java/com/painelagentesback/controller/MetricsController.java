@@ -7,7 +7,6 @@ import com.painelagentesback.models.utils.GlobalMetrics;
 import com.painelagentesback.repository.AgentDailyStatsRepository;
 import com.painelagentesback.repository.GlobalDailyStatsRepository;
 import com.painelagentesback.service.AgentStatusService;
-import com.painelagentesback.service.clients.FilaClient;
 import com.painelagentesback.service.GlobalMetricsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -29,12 +28,6 @@ public class MetricsController {
     private final GlobalMetricsService globalMetricsService;
     private final AgentDailyStatsRepository agentStatsRepository;
     private final GlobalDailyStatsRepository globalStatsRepository;
-    private final FilaClient filaClient;
-
-    @GetMapping("/fila")
-    public ResponseEntity<?> fila() {
-        return ResponseEntity.ok(filaClient.statusFilaSystem());
-    }
 
     @GetMapping("/agents/live")
     public ResponseEntity<Map<String, AgentStatus>> getLiveAgentMetrics() {
@@ -57,7 +50,6 @@ public class MetricsController {
         } catch (Exception ex) {
             return ResponseEntity.notFound().build();
         }
-
     }
 
     @GetMapping("/global/live")

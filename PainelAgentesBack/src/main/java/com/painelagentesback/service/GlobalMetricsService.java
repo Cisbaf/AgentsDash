@@ -69,14 +69,9 @@ public class GlobalMetricsService {
         stats.setChamadasEmFila(globalMetrics.getChamadasEmFila());
         stats.setTempoTotalToqueSegundosGlobal(globalMetrics.getTempoTotalToqueSegundosGlobal());
         stats.setUltimaAtualizacao(LocalDateTime.now());
+        stats.setTotalChamadasAtendidas(globalMetrics.getTotalChamadasAtendidas());
 
         globalStatsRepository.save(stats);
-
-
-        stats.setTotalChamadasAtendidas(globalMetrics.getAllCallDetails().size());
-
-        // Após persistir, podemos limpar a lista em memória se quisermos,
-        // mas como mantemos para first/last, talvez não.
     }
 
     // Carrega do banco os dados globais do dia
@@ -89,7 +84,6 @@ public class GlobalMetricsService {
             globalMetrics.setChamadasAbandonadas(stats.getChamadasAbandonadas());
             globalMetrics.setChamadasEmFila(stats.getChamadasEmFila());
             globalMetrics.setTempoTotalToqueSegundosGlobal(stats.getTempoTotalToqueSegundosGlobal());
-            // Carregar detalhes das chamadas? Talvez não seja necessário se first/last forem consultados do banco
             globalMetrics.setTotalChamadasAtendidas(stats.getTotalChamadasAtendidas());
         });
     }
@@ -115,4 +109,3 @@ public class GlobalMetricsService {
         return uidsAnterioresNaFila.contains(uid);
     }
 }
-

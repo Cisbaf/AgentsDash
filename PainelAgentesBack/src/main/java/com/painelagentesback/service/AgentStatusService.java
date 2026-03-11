@@ -113,7 +113,7 @@ public class AgentStatusService {
                 agent.setRemovido(agent.getRemovido() + 1);
                 log.info("[TRACK-REMOVIDO] {} perdeu a chamada {}. Segue na fila.", agent.getNomeAgente(), callerId);
             } else {
-                if ( Duration.between(agent.getRingingStartTime(), now).getSeconds() < 0){
+                if (Duration.between(agent.getRingingStartTime(), now).getSeconds() < 0) {
                     globalMetricsService.incrementChamadasAbandonadas();
                     log.info("[TRACK-ABANDONADA] {} perdeu a chamada {}. Saiu da fila.", agent.getNomeAgente(), callerId);
                 }
@@ -137,9 +137,7 @@ public class AgentStatusService {
     }
 
     private void atualizarMetricasGlobais() {
-        long total = agents.values().stream()
-                .mapToLong(AgentStatus::getChamadasRecebidasTotal)
-                .sum();
+        long total = agents.values().stream().mapToLong(AgentStatus::getChamadasRecebidasTotal).sum();
         globalMetricsService.addChamadasRecebidas(total);
     }
 
@@ -152,9 +150,7 @@ public class AgentStatusService {
     public void persistCurrentState() {
         LocalDate today = LocalDate.now();
         for (AgentStatus agent : agents.values()) {
-            AgentDailyStats stats = agentStatsRepository
-                    .findByAgentIdAndDate(agent.getId(), today)
-                    .orElse(new AgentDailyStats());
+            AgentDailyStats stats = agentStatsRepository.findByAgentIdAndDate(agent.getId(), today).orElse(new AgentDailyStats());
 
             if (agent.getUltimoStatusAcd() != 0) {
                 stats.setAgentId(agent.getId());
