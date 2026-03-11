@@ -1,6 +1,6 @@
 package com.painelagentesback.config;
 
-import com.painelagentesback.service.AgentClient;
+import com.painelagentesback.service.clients.AgentClient;
 import com.painelagentesback.service.AgentStatusService;
 import com.painelagentesback.service.GlobalMetricsService;
 import lombok.RequiredArgsConstructor;
@@ -34,22 +34,36 @@ public class MonitoringScheduler {
         }
     }
 
-    @Scheduled(fixedRate = 10000)
+    // Coleta a cada 5 segundos
+    @Scheduled(fixedRate = 5000)
     @SchedulerLock(name = "persistMetrics", lockAtLeastFor = "PT1M", lockAtMostFor = "PT2M")
     public void persistMetrics() {
         agentStatusService.persistCurrentState();
         globalMetricsService.persistCurrentState();
     }
 
-    // Reset diário à meia-noite
-    @Scheduled(cron = "0 0 0 * * *")
-    @SchedulerLock(name = "dailyReset", lockAtLeastFor = "PT1M", lockAtMostFor = "PT5M")
-    public void dailyReset() {
+    @Scheduled(cron = "0 0 0 * * *")  // Meia-noite
+    @SchedulerLock(name = "dailyReset_midnight", lockAtLeastFor = "PT1M",lockAtMostFor = "PT5M")
+    public void dailyResetMidnight() {
+        executarReset("meia-noite");
+    }
+
+    @Scheduled(cron = "0 0 6 * * *")  // 6 da manhã
+    @SchedulerLock(name = "dailyReset_morning", lockAtLeastFor = "PT1M", lockAtMostFor = "PT5M")
+    public void dailyResetMorning() {
+        executarReset("6h");
+    }
+
+    private void executarReset(String horario) {
+
         // Persiste o último estado antes de resetar
         agentStatusService.persistCurrentState();
         globalMetricsService.persistCurrentState();
 
+        // Executa os resets
         agentStatusService.resetAllAgentStatuses();
         globalMetricsService.resetGlobalMetrics();
+
+        log.info("Reset programado às {} concluído com sucesso", horario);
     }
 }

@@ -86,7 +86,7 @@ public class AgentStatusService {
 
         if (iniciouToque) {
             agent.setRingingStartTime(LocalDateTime.now());
-            log.debug("[TRACK] Chamada {} começou a tocar para {}", callerId, agent.getNomeAgente());
+            log.info("[TRACK] Chamada {} começou a tocar para {}", callerId, agent.getNomeAgente());
         } else if (parouToque) {
             finalizarCicloToque(agent, currRamal, callerId);
         }
@@ -108,13 +108,16 @@ public class AgentStatusService {
                 globalMetricsService.registrarAtendimento(callerId);
                 globalMetricsService.addCallDetails(callerId, now);
                 agent.getLigacoes().add(new CallDetail(callerId, now));
-                log.debug("[TRACK-ATENDIMENTO] {} atendeu {}", agent.getNomeAgente(), callerId);
+                log.info("[TRACK-ATENDIMENTO] {} atendeu {}", agent.getNomeAgente(), callerId);
             } else if (globalMetricsService.estaNaFila(callerId)) { // Removido (foi para outro agente)
                 agent.setRemovido(agent.getRemovido() + 1);
                 log.info("[TRACK-REMOVIDO] {} perdeu a chamada {}. Segue na fila.", agent.getNomeAgente(), callerId);
             } else {
-                globalMetricsService.incrementChamadasAbandonadas();
-                log.info("[TRACK-ABANDONADA] {} perdeu a chamada {}. Saiu da fila.", agent.getNomeAgente(), callerId);
+                if ( Duration.between(agent.getRingingStartTime(), now).getSeconds() < 0){
+                    globalMetricsService.incrementChamadasAbandonadas();
+                    log.info("[TRACK-ABANDONADA] {} perdeu a chamada {}. Saiu da fila.", agent.getNomeAgente(), callerId);
+                }
+
             }
         }
         agent.setRingingStartTime(null);
