@@ -6,6 +6,7 @@ import com.painelagentesback.models.enitity.AgentsApi;
 import com.painelagentesback.models.utils.AgentStatus;
 import com.painelagentesback.models.utils.FilaResponse;
 import com.painelagentesback.repository.AgentDailyStatsRepository;
+import com.painelagentesback.service.clients.FilaClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -464,26 +465,27 @@ class AgentStatusServiceTest {
         @Test
         @DisplayName("Deve desserializar XML corretamente")
         void shouldDeserializeFilaResponse() throws Exception {
-            String xml = "<chamadas_fila>\n" +
-                    "  <chamadas>\n" +
-                    "    <retorno>0</retorno>\n" +
-                    "    <retorno_codigo>200</retorno_codigo>\n" +
-                    "    <chamada_fila>\n" +
-                    "      <fila>F1</fila>\n" +
-                    "      <numero>1234</numero>\n" +
-                    "      <duracao>10</duracao>\n" +
-                    "      <uid>uid-1</uid>\n" +
-                    "      <protocol>TCP</protocol>\n" +
-                    "    </chamada_fila>\n" +
-                    "    <chamada_fila>\n" +
-                    "      <fila>F2</fila>\n" +
-                    "      <numero>5678</numero>\n" +
-                    "      <duracao>20</duracao>\n" +
-                    "      <uid>uid-2</uid>\n" +
-                    "      <protocol>UDP</protocol>\n" +
-                    "    </chamada_fila>\n" +
-                    "  </chamadas>\n" +
-                    "</chamadas_fila>";
+            String xml = """
+                    <chamadas_fila>
+                      <chamadas>
+                        <retorno>0</retorno>
+                        <retorno_codigo>200</retorno_codigo>
+                        <chamada_fila>
+                          <fila>F1</fila>
+                          <numero>1234</numero>
+                          <duracao>10</duracao>
+                          <uid>uid-1</uid>
+                          <protocol>TCP</protocol>
+                        </chamada_fila>
+                        <chamada_fila>
+                          <fila>F2</fila>
+                          <numero>5678</numero>
+                          <duracao>20</duracao>
+                          <uid>uid-2</uid>
+                          <protocol>UDP</protocol>
+                        </chamada_fila>
+                      </chamadas>
+                    </chamadas_fila>""";
 
             XmlMapper xmlMapper = new XmlMapper();
             FilaResponse response = xmlMapper.readValue(xml, FilaResponse.class);
@@ -498,21 +500,22 @@ class AgentStatusServiceTest {
         @Test
         @DisplayName("Deve ignorar tags extras (retorno_descricao, custom_vars)")
         void shouldIgnoreExtraTags() throws Exception {
-            String xml = "<chamadas_fila>\n" +
-                    "  <chamadas>\n" +
-                    "    <retorno>0</retorno>\n" +
-                    "    <retorno_codigo>200</retorno_codigo>\n" +
-                    "    <retorno_descricao>Sucesso</retorno_descricao>\n" +
-                    "    <chamada_fila>\n" +
-                    "      <fila>F1</fila>\n" +
-                    "      <numero>1234</numero>\n" +
-                    "      <duracao>10</duracao>\n" +
-                    "      <uid>uid-1</uid>\n" +
-                    "      <protocol>TCP</protocol>\n" +
-                    "      <custom_vars><var1>val1</var1></custom_vars>\n" +
-                    "    </chamada_fila>\n" +
-                    "  </chamadas>\n" +
-                    "</chamadas_fila>";
+            String xml = """
+                    <chamadas_fila>
+                      <chamadas>
+                        <retorno>0</retorno>
+                        <retorno_codigo>200</retorno_codigo>
+                        <retorno_descricao>Sucesso</retorno_descricao>
+                        <chamada_fila>
+                          <fila>F1</fila>
+                          <numero>1234</numero>
+                          <duracao>10</duracao>
+                          <uid>uid-1</uid>
+                          <protocol>TCP</protocol>
+                          <custom_vars><var1>val1</var1></custom_vars>
+                        </chamada_fila>
+                      </chamadas>
+                    </chamadas_fila>""";
 
             XmlMapper xmlMapper = new XmlMapper();
             FilaResponse response = xmlMapper.readValue(xml, FilaResponse.class);
@@ -520,6 +523,345 @@ class AgentStatusServiceTest {
             assertThat(response.getChamadas().getItens()).hasSize(1);
             assertThat(response.getChamadas().getItens().getFirst().getUid()).isEqualTo("uid-1");
             // Não deve lançar exceção devido às tags extras
+        }
+    }
+    @Nested
+    @DisplayName("Testes de transições de status sem toque")
+    class StatusTransitionTests {
+
+        @Test
+        @DisplayName("Transição direta de livre (0) para ocupado (1) deve incrementar tempo de ligação")
+        void shouldIncrementCallTimeWhenDirectFromFreeToOccupied() {
+            AgentsApi dto = createDto(1, 1, CALLER_ID);
+            service.updateAgentStatus(dto);
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getTempoTotalLigacaoSegundos()).isEqualTo(1);
+            assertThat(agent.getTempoTotalLivreSegundos()).isZero();
+        }
+
+        @Test
+        @DisplayName("Transição direta de pausa (5) para ocupado (1) deve incrementar tempo de ligação")
+        void shouldIncrementCallTimeWhenFromPauseToOccupied() {
+            // Primeiro coloca em pausa
+            service.updateAgentStatus(createDto(5, 0, CALLER_ID));
+            // Depois vai para ocupado
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID));
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getTempoTotalLigacaoSegundos()).isEqualTo(1);
+            assertThat(agent.getTempoTotalPausaSegundos()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Transição direta de ocupado (1) para pausa (5) deve incrementar tempo de pausa e contador de pausas")
+        void shouldIncrementPauseWhenFromOccupiedToPause() {
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID));
+            service.updateAgentStatus(createDto(5, 0, CALLER_ID));
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getTempoTotalPausaSegundos()).isEqualTo(1);
+            assertThat(agent.getPausasIniciadasTotal()).isEqualTo(1);
+            assertThat(agent.getTempoTotalLigacaoSegundos()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Múltiplas transições sem toque acumulam tempos corretamente")
+        void shouldAccumulateTimesAcrossMultipleTransitions() throws InterruptedException {
+            // Sequência: livre -> ocupado -> livre -> ocupado -> pausa
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID)); // livre
+            Thread.sleep(1100);
+
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID)); // ocupado
+            Thread.sleep(1100);
+
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID)); // livre
+            Thread.sleep(1100);
+
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID)); // ocupado
+            Thread.sleep(1100);
+
+            service.updateAgentStatus(createDto(5, 0, CALLER_ID)); // pausa
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getTempoTotalLivreSegundos()).isEqualTo(2); // duas vezes livre
+            assertThat(agent.getTempoTotalLigacaoSegundos()).isEqualTo(2); // duas vezes ocupado
+            assertThat(agent.getTempoTotalPausaSegundos()).isEqualTo(1);
+            assertThat(agent.getPausasIniciadasTotal()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Atualizações com mesmo status consecutivas devem acumular tempo")
+        void shouldAccumulateTimeWhenSameStatusRepeated() {
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID)); // ocupado
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID)); // ocupado de novo
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID)); // ocupado de novo
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getTempoTotalLigacaoSegundos()).isEqualTo(3);
+        }
+    }
+
+    @Nested
+    @DisplayName("Testes de lógica de toque com abandono")
+    class RingingWithAbandonTests {
+
+        @Test
+        @DisplayName("Fim do toque sem atendimento e chamada NÃO está na fila deve incrementar chamadas abandonadas no GlobalMetrics")
+        void shouldIncrementAbandonedWhenNotAnsweredAndNotInQueue() {
+            when(globalMetricsService.estaNaFila(CALLER_ID)).thenReturn(false);
+
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID));
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID));
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService).incrementChamadasAbandonadas();
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
+        }
+
+        @Test
+        @DisplayName("Fim do toque com atendimento não deve incrementar abandonadas")
+        void shouldNotIncrementAbandonedWhenAnswered() {
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID));
+            service.updateAgentStatus(createDto(1, 1, CALLER_ID));
+
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(globalMetricsService).registrarAtendimento(CALLER_ID);
+        }
+
+        @Test
+        @DisplayName("Fim do toque com remoção (ainda na fila) não deve incrementar abandonadas")
+        void shouldNotIncrementAbandonedWhenRemoved() {
+            when(globalMetricsService.estaNaFila(CALLER_ID)).thenReturn(true);
+
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID));
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID));
+
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(globalMetricsService).estaNaFila(CALLER_ID);
+        }
+
+        @Test
+        @DisplayName("Fim do toque sem callerId não deve incrementar abandonadas nem removido")
+        void shouldNotIncrementAnythingWhenCallerIdIsEmpty() {
+            service.updateAgentStatus(createDto(1, 8, null));
+            service.updateAgentStatus(createDto(1, 0, ""));
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
+            verify(globalMetricsService, never()).estaNaFila(anyString());
+        }
+
+        @Test
+        @DisplayName("Fim do toque indo para pausa (status 5) deve processar corretamente")
+        void shouldHandleRingingEndingInPause() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(CALLER_ID)).thenReturn(false);
+
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID));
+
+            Thread.sleep(1100);
+
+            service.updateAgentStatus(createDto(5, 0, CALLER_ID)); // vai para pausa
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getTempoTotalToqueSegundos()).isPositive();
+            assertThat(agent.getTempoTotalPausaSegundos()).isEqualTo(1);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService).incrementChamadasAbandonadas();
+        }
+    }
+
+    @Nested
+    @DisplayName("Testes de papel do agente (casos extremos)")
+    class AgentRoleEdgeCasesTests {
+
+        @Test
+        @DisplayName("ID vazio deve retornar MEDICO")
+        void shouldReturnMedicoWhenIdEmpty() {
+            AgentsApi dto = createDto(1, 1, CALLER_ID);
+            dto.setId("");
+            service.updateAgentStatus(dto);
+            AgentStatus agent = service.getAllAgentStatuses().get("");
+            assertThat(agent).isNotNull();
+            assertThat(agent.getAgentRole()).isEqualTo("MEDICO");
+        }
+
+        @Test
+        @DisplayName("ID com 12 caracteres começando com 3 deve retornar OUTRO")
+        void shouldReturnOutroForUnrecognizedPrefix() {
+            AgentsApi dto = createDto(1, 1, CALLER_ID);
+            dto.setId("312345678901"); // 12 chars, começa com 3
+            service.updateAgentStatus(dto);
+            AgentStatus agent = service.getAllAgentStatuses().get("312345678901");
+            assertThat(agent).isNotNull();
+            assertThat(agent.getAgentRole()).isEqualTo("OUTRO");
+        }
+    }
+
+    @Nested
+    @DisplayName("Testes adicionais de lógica de toque (removidos e abandonados)")
+    class AdditionalRingingLogicTests {
+
+        @Test
+        @DisplayName("Chamada abandonada: duração de toque exatamente 10 segundos e não está na fila")
+        void shouldNotIncrementAbandonedWhenRingingDurationIsExactly10Seconds() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(CALLER_ID)).thenReturn(false);
+
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID)); // Início do toque
+
+            // Simula 10 segundos de toque
+            Thread.sleep(10000); // 10 segundos
+
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID)); // Fim do toque, não atendido
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas(); // Não deve ser abandonada
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
+        }
+
+        @Test
+        @DisplayName("Chamada não abandonada: duração de toque maior que 10 segundos e não está na fila")
+        void shouldNotIncrementAbandonedWhenRingingDurationIsMoreThan10Seconds() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(CALLER_ID)).thenReturn(false);
+
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID)); // Início do toque
+
+            // Simula mais de 10 segundos de toque
+            Thread.sleep(11000); // 11 segundos
+
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID)); // Fim do toque, não atendido
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas(); // Não deve ser abandonada
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
+        }
+
+        @Test
+        @DisplayName("Chamada removida: transição de toque para livre (ramal 0) e ainda na fila")
+        void shouldIncrementRemovidoWhenRingingEndsInFreeAndStillInQueue() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(CALLER_ID)).thenReturn(true);
+
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID)); // Início do toque
+            Thread.sleep(100); // Pequeno delay para garantir duration > 0
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID)); // Fim do toque, livre, ainda na fila
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isEqualTo(1);
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
+        }
+
+        @Test
+        @DisplayName("Chamada removida: transição de toque para pausa (ramal 0, acd 5) e ainda na fila")
+        void shouldIncrementRemovidoWhenRingingEndsInPauseAndStillInQueue() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(CALLER_ID)).thenReturn(true);
+
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID)); // Início do toque
+            Thread.sleep(100); // Pequeno delay para garantir duration > 0
+            service.updateAgentStatus(createDto(5, 0, CALLER_ID)); // Fim do toque, pausa, ainda na fila
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isEqualTo(1);
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
+        }
+
+        @Test
+        @DisplayName("Múltiplas chamadas removidas para o mesmo agente")
+        void shouldHandleMultipleRemovedCallsForSameAgent() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(anyString())).thenReturn(true);
+
+            // Primeira chamada
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID + "-1"));
+            Thread.sleep(100);
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID + "-1"));
+
+            // Segunda chamada
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID + "-2"));
+            Thread.sleep(100);
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID + "-2"));
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isEqualTo(2);
+            verify(globalMetricsService, times(2)).estaNaFila(anyString());
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+        }
+
+        @Test
+        @DisplayName("Múltiplas chamadas abandonadas para o mesmo agente")
+        void shouldHandleMultipleAbandonedCallsForSameAgent() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(anyString())).thenReturn(false);
+
+            // Primeira chamada abandonada (duração < 10s)
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID + "-1"));
+            Thread.sleep(5000); // 5 segundos
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID + "-1"));
+
+            // Segunda chamada abandonada (duração < 10s)
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID + "-2"));
+            Thread.sleep(7000); // 7 segundos
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID + "-2"));
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService, times(2)).incrementChamadasAbandonadas();
+            verify(globalMetricsService, times(2)).estaNaFila(anyString());
+        }
+
+        @Test
+        @DisplayName("Cenário misto: uma removida e uma abandonada para o mesmo agente")
+        void shouldHandleMixedRemovedAndAbandonedCallsForSameAgent() throws InterruptedException {
+            // Primeira chamada: removida (ainda na fila)
+            when(globalMetricsService.estaNaFila(CALLER_ID + "-1")).thenReturn(true);
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID + "-1"));
+            Thread.sleep(100);
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID + "-1"));
+
+            // Segunda chamada: abandonada (não está na fila, duração < 10s)
+            when(globalMetricsService.estaNaFila(CALLER_ID + "-2")).thenReturn(false);
+            service.updateAgentStatus(createDto(1, 8, CALLER_ID + "-2"));
+            Thread.sleep(5000); // 5 segundos
+            service.updateAgentStatus(createDto(1, 0, CALLER_ID + "-2"));
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isEqualTo(1);
+            verify(globalMetricsService, times(1)).incrementChamadasAbandonadas();
+            verify(globalMetricsService, times(2)).estaNaFila(anyString());
+        }
+
+        @Test
+        @DisplayName("Chamada abandonada: duração de toque menor que 10 segundos, mas callerId nulo")
+        void shouldNotIncrementAbandonedWhenCallerIdIsNull() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(anyString())).thenReturn(false);
+
+            service.updateAgentStatus(createDto(1, 8, null)); // Início do toque com callerId nulo
+            Thread.sleep(5000); // 5 segundos
+            service.updateAgentStatus(createDto(1, 0, null)); // Fim do toque, não atendido, callerId nulo
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
+        }
+
+        @Test
+        @DisplayName("Chamada abandonada: duração de toque menor que 10 segundos, mas callerId vazio")
+        void shouldNotIncrementAbandonedWhenCallerIdIsEmptyString() throws InterruptedException {
+            when(globalMetricsService.estaNaFila(anyString())).thenReturn(false);
+
+            service.updateAgentStatus(createDto(1, 8, "")); // Início do toque com callerId vazio
+            Thread.sleep(5000); // 5 segundos
+            service.updateAgentStatus(createDto(1, 0, "")); // Fim do toque, não atendido, callerId vazio
+
+            AgentStatus agent = service.getAllAgentStatuses().get(AGENT_ID);
+            assertThat(agent.getRemovido()).isZero();
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(globalMetricsService, never()).registrarAtendimento(anyString());
         }
     }
 }
