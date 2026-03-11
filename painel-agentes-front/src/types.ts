@@ -4,8 +4,8 @@ export type GlobalMetrics = {
     totalchamadasRecebidas: number;
     totalChamadasEmFila: number;
     chamadasAbandonadas: number;
-    chamadasEmFila: number;
     totalTempoToqueSegundosGlobal: number;
+    chamadasEmFila: number;
 };
 
 export type AgentStatus = {
@@ -23,4 +23,10 @@ export type AgentStatus = {
     ultimoStatusAcd: number;
     ultimoStatusRamal: number;
     ringingStartTime: string | null;
+    ligacoes: Ligacoes[];
 };
+
+export type Ligacoes = {
+    callerIdRAni: string;
+    timestamp: string;
+}

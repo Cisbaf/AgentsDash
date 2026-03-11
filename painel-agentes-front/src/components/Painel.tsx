@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     Box,
     Flex,
@@ -9,9 +9,11 @@ import {
     Spinner,
     Center,
     Card,
-    Table
+    Table,
+    Select,
+    NativeSelect
 } from "@chakra-ui/react";
-import { PhoneCall, PhoneMissed, Clock, Users, Headset } from "lucide-react";
+import { PhoneCall, PhoneMissed, Users, Headset, Filter, ListFilter } from "lucide-react";
 import { GlobalMetrics, AgentStatus } from "../types";
 import MetricCard from "./MetricCard";
 
@@ -19,6 +21,14 @@ export default function PainelAgentes() {
     const [globalMetrics, setGlobalMetrics] = useState<GlobalMetrics | null>(null);
     const [agents, setAgents] = useState<AgentStatus[]>([]);
     const [loading, setLoading] = useState(true);
+    const [roleFilter, setRoleFilter] = useState("");
+
+    const filteredAgents = useMemo(() => {
+        if (roleFilter === "") {
+            return agents;
+        }
+        return agents.filter(agent => agent.agentRole.toUpperCase() === roleFilter.toUpperCase())
+    }, [agents, roleFilter])
 
     const isFetching = useRef(false);
 
@@ -70,7 +80,7 @@ export default function PainelAgentes() {
         // Define o intervalo de 1 segundo (1000ms)
         const interval = setInterval(() => {
             fetchDashboardData();
-        }, 1000);
+        }, 3000);
 
         // Limpa o intervalo quando o usuário sai da página
         return () => clearInterval(interval);
@@ -97,6 +107,30 @@ export default function PainelAgentes() {
                 </Flex>
             </Center>
         );
+    }
+
+    function filtroButton() {
+        return (
+            <Box position="relative">
+                <Box as="button" p={2} borderRadius="md" _hover={{ bg: "gray.100" }} color={roleFilter ? "blue.500" : "gray.600"} transition="all 0.2s">
+                    <ListFilter size={20} />
+                </Box>
+                <NativeSelect.Root position="absolute" top={0} left={0} w="100%" h="100%" opacity={0}
+                >
+                    <NativeSelect.Field
+                        cursor="pointer"
+                        onChange={(e) => setRoleFilter(e.target.value)}
+                        value={roleFilter}
+                    >
+                        <option value="">Todas as Funções</option>
+                        {[...new Set(agents.map(a => a.agentRole))].map(role => (
+                            <option key={role} value={role}>
+                                {role}
+                            </option>
+                        ))}
+                    </NativeSelect.Field>
+                </NativeSelect.Root>
+            </Box>)
     }
 
     return (
@@ -166,9 +200,11 @@ export default function PainelAgentes() {
 
                 {/* Tabela de Agentes */}
                 <Card.Root bg="white" shadow="sm" borderRadius="xl" overflow="hidden">
-                    <Box p="6" borderBottomWidth="1px" borderColor="gray.100">
-                        <Heading size="md" color="gray.800">Status dos Agentes</Heading>
-                    </Box>
+                    <Flex p="6" borderBottomWidth="1px" borderColor="gray.100">
+                        <Heading size="md" color="gray.800" display={"flex"} justifyContent={"space-between"}>Status dos Agentes {filtroButton()}</Heading>
+
+
+                    </Flex>
                     <Box overflowX="auto">
                         <Table.Root variant="line" size="md">
                             <Table.Header bg="gray.50">
@@ -184,7 +220,7 @@ export default function PainelAgentes() {
                                 </Table.Row>
                             </Table.Header>
                             <Table.Body>
-                                {agents.toSorted((a, b) => a.agentRole?.localeCompare(b.agentRole)).map((agent) => (
+                                {filteredAgents.toSorted((a, b) => a.agentRole?.localeCompare(b.agentRole)).map((agent) => (
                                     <Table.Row key={agent.id} _hover={{ bg: "gray.50" }}>
                                         <Table.Cell fontWeight="medium">{agent.nomeAgente.toUpperCase()}</Table.Cell>
                                         <Table.Cell>{agent.agentRole}</Table.Cell>
@@ -201,7 +237,7 @@ export default function PainelAgentes() {
                                         <Table.Cell>{agent.removido}</Table.Cell>
                                     </Table.Row>
                                 ))}
-                                {agents.length === 0 && (
+                                {filteredAgents.length === 0 && (
                                     <Table.Row>
                                         <Table.Cell colSpan={6} textAlign="center" py="8" color="gray.500">
                                             Nenhum agente encontrado no momento.
