@@ -1,4 +1,4 @@
-package com.painelagentesback.service;
+package com.painelagentesback.service.clients;
 
 import com.painelagentesback.models.enitity.AgentsApi;
 import org.springframework.cloud.openfeign.FeignClient;

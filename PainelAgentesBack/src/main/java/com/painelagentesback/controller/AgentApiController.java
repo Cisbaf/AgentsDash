@@ -1,6 +1,6 @@
 package com.painelagentesback.controller;
 
-import com.painelagentesback.service.AgentClient;
+import com.painelagentesback.service.clients.AgentClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;

@@ -4,6 +4,7 @@ import com.painelagentesback.models.enitity.GlobalDailyStats;
 import com.painelagentesback.models.utils.FilaResponse;
 import com.painelagentesback.models.utils.GlobalMetrics;
 import com.painelagentesback.repository.GlobalDailyStatsRepository;
+import com.painelagentesback.service.clients.FilaClient;
 import jakarta.transaction.Transactional;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
