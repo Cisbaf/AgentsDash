@@ -30,3 +30,8 @@ export type Ligacoes = {
     callerIdRAni: string;
     timestamp: string;
 }
+
+export type FirstLastCalls = {
+    frist?: Ligacoes;
+    last?: Ligacoes;
+};
