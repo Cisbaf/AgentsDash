@@ -53,4 +53,5 @@ public class AgentDailyStats {
     @Column(name = "ultima_atualizacao")
     private LocalDateTime ultimaAtualizacao;
 
+    private int removidos;
 }

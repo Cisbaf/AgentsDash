@@ -28,6 +28,9 @@ public class AgentStatus {
     private int ultimoStatusAcd;                 // Último status ACD (1=logado, 5=pausa, etc.)
     private int ultimoStatusRamal;                // Último status do ramal (0=livre, 1=ocupado, 8=tocando)
     private LocalDateTime ringingStartTime;      // Início do último estado "tocando"
+    private LocalDateTime callAnsweredTime;      // Tempo do chamado
+    private String lastAnsweredCallerId;
+    private boolean attendanceRegistered;
     private List<CallDetail> ligacoes = new CopyOnWriteArrayList<>();
 
 }
