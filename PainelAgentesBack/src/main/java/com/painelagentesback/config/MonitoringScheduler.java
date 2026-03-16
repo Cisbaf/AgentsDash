@@ -42,16 +42,16 @@ public class MonitoringScheduler {
         globalMetricsService.persistCurrentState();
     }
 
-    @Scheduled(cron = "0 0 0 * * *")  // Meia-noite
-    @SchedulerLock(name = "dailyReset_midnight", lockAtLeastFor = "PT1M",lockAtMostFor = "PT5M")
-    public void dailyResetMidnight() {
-        executarReset("meia-noite");
-    }
-
-    @Scheduled(cron = "0 0 6 * * *")  // 6 da manhã
+    @Scheduled(cron = "0 0 7 * * *")
     @SchedulerLock(name = "dailyReset_morning", lockAtLeastFor = "PT1M", lockAtMostFor = "PT5M")
     public void dailyResetMorning() {
-        executarReset("6h");
+        executarReset("7h");
+    }
+
+    @Scheduled(cron = "0 0 19 * * *")
+    @SchedulerLock(name = "dailyReset_evening", lockAtLeastFor = "PT1M", lockAtMostFor = "PT5M")
+    public void dailyResetEvening() {
+        executarReset("19h");
     }
 
     private void executarReset(String horario) {
