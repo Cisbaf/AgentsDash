@@ -9,6 +9,7 @@ import com.painelagentesback.repository.GlobalDailyStatsRepository;
 import com.painelagentesback.service.AgentStatusService;
 import com.painelagentesback.service.GlobalMetricsService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/metrics")
 @RequiredArgsConstructor
@@ -56,7 +58,7 @@ public class MetricsController {
     public ResponseEntity<GlobalMetrics> getLiveGlobalMetrics() {
         try {
             var global = globalMetricsService.getGlobalMetrics();
-            if (global == null || global.getAllCallDetails().isEmpty()) {
+            if (global == null) {
                 return ResponseEntity.noContent().build();
             }
             return ResponseEntity.ok(global);

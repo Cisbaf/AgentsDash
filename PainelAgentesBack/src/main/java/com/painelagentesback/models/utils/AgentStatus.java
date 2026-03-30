@@ -4,6 +4,7 @@ import com.painelagentesback.models.enitity.CallDetail;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -32,5 +33,10 @@ public class AgentStatus {
     private String lastAnsweredCallerId;
     private boolean attendanceRegistered;
     private List<CallDetail> ligacoes = new CopyOnWriteArrayList<>();
+    private LocalDateTime pauseStartTime;
+    private LocalDateTime freeStartTime;
+    private LocalDateTime callStartTime;
+    private LocalDateTime pendingEncerramento;
+    private LocalDateTime mudancaRamal;
 
 }

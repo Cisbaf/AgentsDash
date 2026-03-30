@@ -3,6 +3,7 @@ package com.painelagentesback.service;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.painelagentesback.models.enitity.GlobalDailyStats;
+import com.painelagentesback.models.utils.AgentStatus;
 import com.painelagentesback.models.utils.FilaResponse;
 import com.painelagentesback.models.utils.GlobalMetrics;
 import com.painelagentesback.repository.GlobalDailyStatsRepository;
@@ -16,10 +17,8 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -29,12 +28,17 @@ public class GlobalMetricsService {
     private final GlobalMetrics globalMetrics = new GlobalMetrics();
     private final GlobalDailyStatsRepository globalStatsRepository;
     private final FilaClient filaClient;
-    private final Set<String> uidsAnterioresNaFila = ConcurrentHashMap.newKeySet();
+
 
     private final Cache<String, LocalDateTime> attendedCalls = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofMinutes(10))
             .maximumSize(50_000)  // limite seguro para evitar crescimento descontrolado
             .recordStats()         // opcional: para monitoramento
+            .build();
+
+    private final Cache<String, LocalDateTime> confirmedAttendances = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .maximumSize(50_000)
             .build();
 
     // Cache para rastreamento global de chamadas (última vez vista)
@@ -43,16 +47,26 @@ public class GlobalMetricsService {
             .maximumSize(20_000)
             .build();
 
-    // Métricas globais (usando AtomicLong para thread-safety)
-    private final AtomicLong totalChamadasRecebidas = new AtomicLong(0);
-    private final AtomicLong totalToqueSegundos = new AtomicLong(0);
-    private final AtomicLong chamadasAbandonadas = new AtomicLong(0);
-
     public void addCallDetails(String callerIdRAni, LocalDateTime timestamp) {
         globalMetrics.addCallDetails(callerIdRAni, timestamp);
-        globalMetrics.incrementTotalChamadas();
-        globalMetrics.setTotalChamadasAtendidas(globalMetrics.getAllCallDetails().size());
     }
+
+    public void incrementTotalChamadas(Collection<AgentStatus> recebidas) {
+        globalMetrics.setTotalchamadasRecebidas(0);
+        for(AgentStatus agentStatus:recebidas) {
+            globalMetrics.setTotalchamadasRecebidas(agentStatus.getChamadasRecebidasTotal() + globalMetrics.getTotalchamadasRecebidas());
+        }
+        var total = globalMetrics.getTotalchamadasRecebidas();
+        globalMetrics.setTotalChamadasAtendidas(total - globalMetrics.getChamadasAbandonadas());
+    }
+
+    public void registrarAtendimentoConfirmado(String callerId, LocalDateTime answeredAt) {
+        if (callerId != null && !callerId.isEmpty()) {
+            confirmedAttendances.put(callerId, answeredAt);
+            log.debug("Chamada {} confirmada como atendimento real em {}", callerId, answeredAt);
+        }
+    }
+
 
     public void addTotalToqueSegundos(long seconds) {
         globalMetrics.addTotalToqueSegundos(seconds);
@@ -114,11 +128,7 @@ public class GlobalMetricsService {
         globalMetrics.setChamadasEmFila(0);
         globalMetrics.setTempoTotalToqueSegundosGlobal(0);
         globalMetrics.clearCallDetails();
-    }
-
-    // Métdo para o AgentStatusService verificar se a chamada continua na fila
-    public boolean estaNaFila(String uid) {
-        return uidsAnterioresNaFila.contains(uid);
+        globalStatsRepository.deleteAll();
     }
 
     public void registrarAtendimento(String callerId, LocalDateTime answeredAt) {
@@ -130,8 +140,8 @@ public class GlobalMetricsService {
 
     // Verifica se uma chamada foi atendida após um determinado instante
     public boolean wasAttendedAfter(String callerId, LocalDateTime since) {
-        LocalDateTime attendedTime = attendedCalls.getIfPresent(callerId);
-        return attendedTime != null && attendedTime.isAfter(since);
+        LocalDateTime t = confirmedAttendances.getIfPresent(callerId);
+        return t != null && t.isAfter(since);
     }
 
     // Adiciona um callerId ao rastreador global (quando toca ou é atendida)

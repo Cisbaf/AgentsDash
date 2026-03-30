@@ -13,6 +13,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
+@ToString
 public class GlobalMetrics {
     private long totalChamadasAtendidas;
     private long totalchamadasRecebidas;
@@ -23,6 +24,9 @@ public class GlobalMetrics {
 
     // Métodos sincronizados para atualizações thread-safe
     public synchronized void incrementTotalChamadas() {
+        this.totalchamadasRecebidas++;
+    }
+    public synchronized void incrementTotalChamadasAtendidas() {
         this.totalChamadasAtendidas++;
     }
 

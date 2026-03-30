@@ -30,13 +30,13 @@ public class MonitoringScheduler {
             }
         } catch (Exception e) {
             // Log de erro
-            System.err.println("Erro na coleta: " + e.getMessage());
+            log.error("Erro na coleta: {}", e.getMessage(), e);
         }
     }
 
-    // Coleta a cada 5 segundos
-    @Scheduled(fixedRate = 5000)
-    @SchedulerLock(name = "persistMetrics", lockAtLeastFor = "PT1M", lockAtMostFor = "PT2M")
+    // Coleta a cada 3 segundos
+    @Scheduled(fixedRate = 3000)
+    @SchedulerLock(name = "persistMetrics", lockAtLeastFor = "PT4S", lockAtMostFor = "PT10S")
     public void persistMetrics() {
         agentStatusService.persistCurrentState();
         globalMetricsService.persistCurrentState();
@@ -56,14 +56,10 @@ public class MonitoringScheduler {
 
     private void executarReset(String horario) {
 
-        // Persiste o último estado antes de resetar
-        agentStatusService.persistCurrentState();
-        globalMetricsService.persistCurrentState();
-
         // Executa os resets
         agentStatusService.resetAllAgentStatuses();
         globalMetricsService.resetGlobalMetrics();
 
-        log.info("Reset programado às {} concluído com sucesso", horario);
+        log.warn("Reset programado às {} concluído com sucesso", horario);
     }
 }

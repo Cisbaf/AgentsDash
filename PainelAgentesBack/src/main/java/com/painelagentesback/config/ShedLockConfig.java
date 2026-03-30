@@ -16,6 +16,7 @@ public class ShedLockConfig {
         return new JdbcTemplateLockProvider(
                 JdbcTemplateLockProvider.Configuration.builder()
                         .withJdbcTemplate(new JdbcTemplate(dataSource))
+                        .withTableName("agents_dash.shedlock")
                         .usingDbTime()
                         .build()
         );
