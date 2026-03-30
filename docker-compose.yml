@@ -1,0 +1,28 @@
+services:
+  backend:
+    image: gustavoffonseca/painelagentes:back
+    ports:
+      - "8085:8080"
+    networks:
+      - painel_agents_net
+    environment:
+      PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql_aval_bases:3306/agents_dash
+      DB_USER: root
+      DB_PASSWORD: root
+    volumes:
+      - ./logs:/app/logs
+  front:
+    image: gustavoffonseca/painelagentes:front
+    environment:
+      - BACKEND_INTERNAL_URL=http://backend:8080/api
+      - NEXT_PUBLIC_BACKEND_URL=http://backend:8080/api
+    ports:
+      - "3005:3000"
+    networks:
+      - painel_agents_net
+
+networks:
+  painel_agents_net:
+    external: true
+    name: avaliacaobases_back_bases_network
