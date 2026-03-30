@@ -1,6 +1,6 @@
 import { proxyFetch } from "@/lib/proxyfetch";
 
-export async function GET(req: Request, { params }: { params: { agentId: string } }) {
+export async function GET(req: Request, { params }: { params: Promise<{ agentId: string }> }) {
     try {
         const { agentId } = await params;
 

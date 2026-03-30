@@ -24,6 +24,7 @@ export type AgentStatus = {
     ultimoStatusRamal: number;
     ringingStartTime: string | null;
     ligacoes: Ligacoes[];
+    mudancaRamal: any;
 };
 
 export type Ligacoes = {

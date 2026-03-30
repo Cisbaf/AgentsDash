@@ -1,53 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-    Box,
-    Flex,
-    Grid,
-    Text,
-    Heading,
-    Badge,
-    Spinner,
-    Center,
-    Card,
-    Table,
-    NativeSelect,
-    Button,
-    DialogRoot,
-    DialogContent,
-    DialogHeader,
-    DialogBody,
-    DialogFooter,
-    DialogCloseTrigger,
-    DialogTitle,
-    DialogBackdrop,
-    IconButton,
-    Stack,
-    Separator,
-    Portal,
+    Box, Flex, Grid, Text, Heading, Spinner, Center, Card,
+    Table, Button, IconButton, Stack
 } from "@chakra-ui/react";
 import { PhoneCall, PhoneMissed, Users, Headset, ListFilter, Info, Clock } from "lucide-react";
-import { GlobalMetrics, AgentStatus, Ligacoes, FirstLastCalls } from "../types";
+import { GlobalMetrics, AgentStatus } from "../types";
 import MetricCard from "./MetricCard";
+import CallsDialogs from "./CallsDialogs";
+import PauseDialog from "./PauseDialog";
 
 export default function PainelAgentes() {
     const [globalMetrics, setGlobalMetrics] = useState<GlobalMetrics>();
     const [agents, setAgents] = useState<AgentStatus[]>([]);
     const [loading, setLoading] = useState(true);
-    const [roleFilter, setRoleFilter] = useState("");
 
-    // Estados para o Modal (Dialog)
+    // Estados para o modal principal (ligações + pausas)
+    const [pauses, setPauses] = useState<any[]>([]);
+    const [pausesLoading, setPausesLoading] = useState(false);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [selectedAgent, setSelectedAgent] = useState<AgentStatus | null>(null);
-    const [agentCalls, setAgentCalls] = useState<Ligacoes[]>([]);
-    const [firstLastCalls, setFirstLastCalls] = useState<FirstLastCalls | null>(null);
-    const [loadingDetails, setLoadingDetails] = useState(false);
+
+    // Estados para o novo modal exclusivo de pausas
+    const [isPauseDialogOpen, setIsPauseDialogOpen] = useState(false);
+    const [selectedAgentForPauses, setSelectedAgentForPauses] = useState<AgentStatus | null>(null);
+    const [pauseHistory, setPauseHistory] = useState<any[]>([]);
+    const [pauseHistoryLoading, setPauseHistoryLoading] = useState(false);
+
+    // Filtros
+    const [roleFilters, setRoleFilters] = useState<string[]>([]);
+    const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
 
     const filteredAgents = useMemo(() => {
-        if (!roleFilter) return agents;
-        return agents.filter(agent =>
-            agent.agentRole?.toLowerCase() === roleFilter.toLowerCase() || agent.nomeAgente.toLowerCase().includes(roleFilter.toLowerCase())
-        );
-    }, [agents, roleFilter]);
+        const filtered = roleFilters.length > 0
+            ? agents.filter(agent => agent.agentRole && roleFilters.includes(agent.agentRole) && agent.tempoTotalLigacaoSegundos > 0)
+            : agents.filter(agent => agent.agentRole != null && agent.agentRole !== "" && agent.tempoTotalLigacaoSegundos > 0);
+        return [...filtered].sort((a, b) => (a.agentRole || '').localeCompare(b.agentRole || ''));
+    }, [agents, roleFilters]);
 
     const isFetching = useRef(false);
 
@@ -68,8 +56,11 @@ export default function PainelAgentes() {
                 ...agentsData[key],
                 id: key,
             }));
-            console.log(agentsArray);
-            setAgents(agentsArray.filter(a => a.nomeAgente !== "" || a.nomeAgente !== null).sort((a, b) => a.nomeAgente.localeCompare(b.nomeAgente)));;
+            setAgents(
+                agentsArray
+                    .filter(a => a.nomeAgente && a.nomeAgente !== "")
+                    .sort((a, b) => a.nomeAgente.localeCompare(b.nomeAgente))
+            );
         } catch (err) {
             console.error("Erro ao carregar dados:", err);
         } finally {
@@ -78,30 +69,57 @@ export default function PainelAgentes() {
         }
     };
 
-    const fetchAgentDetails = async (agentId: string) => {
-        setLoadingDetails(true);
+    // Busca pausas para o modal principal (com ligações)
+    const fetchPausas = async () => {
+        if (!selectedAgent?.id) return;
+        setPausesLoading(true);
         try {
-            const [callsRes, datesRes] = await Promise.all([
-                fetch(`/api/metrics/ligacao/${agentId}`),
-                fetch(`/api/metrics/ligacao/dates/${agentId}`)
-            ]);
-            const callsData = callsRes.ok ? await callsRes.json() : [];
-            const datesData = datesRes.ok ? await datesRes.json() : null;
-            setAgentCalls(callsData);
-            setFirstLastCalls(datesData);
+            const pausesRes = await fetch(`/api/agents/pauses/${selectedAgent.id}`);
+            if (!pausesRes.ok) throw new Error(`Erro HTTP: ${pausesRes.status}`);
+            const pausesData = await pausesRes.json();
+            setPauses(pausesData);
         } catch (err) {
-            console.error("Erro ao carregar detalhes:", err);
-            setAgentCalls([]);
-            setFirstLastCalls(null);
+            console.error("Erro ao carregar pausas:", err);
+            setPauses([]);
         } finally {
-            setLoadingDetails(false);
+            setPausesLoading(false);
+        }
+    };
+
+    // Busca pausas para o modal exclusivo
+    const fetchPauseHistory = async (agentId: string) => {
+        setPauseHistoryLoading(true);
+        try {
+            const res = await fetch(`/api/agents/pauses/${agentId}`);
+            if (!res.ok) throw new Error(`Erro HTTP: ${res.status}`);
+            const data = await res.json();
+            setPauseHistory(data);
+        } catch (err) {
+            console.error("Erro ao carregar pausas:", err);
+            setPauseHistory([]);
+        } finally {
+            setPauseHistoryLoading(false);
         }
     };
 
     const handleOpenDetails = (agent: AgentStatus) => {
         setSelectedAgent(agent);
         setIsDialogOpen(true);
-        if (agent.id) fetchAgentDetails(agent.id);
+        fetchPausas();
+    };
+
+    const handleOpenPauseDetails = (agent: AgentStatus) => {
+        setSelectedAgentForPauses(agent);
+        setIsPauseDialogOpen(true);
+        fetchPauseHistory(agent.id!);
+    };
+
+    const toggleRoleFilter = (role: string) => {
+        setRoleFilters(prev =>
+            prev.includes(role)
+                ? prev.filter(r => r !== role)
+                : [...prev, role]
+        );
     };
 
     useEffect(() => {
@@ -116,6 +134,35 @@ export default function PainelAgentes() {
         const m = Math.floor((seconds % 3600) / 60);
         const s = Math.floor(seconds % 60);
         return `${h > 0 ? `${h.toString().padStart(2, "0")}:` : ""}${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    };
+
+    const getLiveTime = (accumulatedSeconds: number, lastChangeTimestamp: string | null, isActive: boolean) => {
+        if (!isActive || !lastChangeTimestamp) return accumulatedSeconds;
+
+        try {
+            // lastChangeTimestamp pode ser ISO ("2026-03-30T14:35:20") ou apenas hora ("14:35:20")
+            let timePart: string;
+            if (lastChangeTimestamp.includes('T')) {
+                // Formato ISO: pega depois do 'T'
+                timePart = lastChangeTimestamp.split('T')[1];
+            } else {
+                timePart = lastChangeTimestamp;
+            }
+
+            const [hours, minutes, seconds] = timePart.split(':').map(Number);
+            if (isNaN(hours)) return accumulatedSeconds;
+
+            const now = new Date();
+            const lastChange = new Date();
+            lastChange.setHours(hours, minutes, seconds, 0);
+
+            const diffInSeconds = Math.floor((now.getTime() - lastChange.getTime()) / 1000);
+            if (diffInSeconds < 0 || diffInSeconds > 86400) return accumulatedSeconds;
+
+            return accumulatedSeconds + diffInSeconds;
+        } catch (e) {
+            return accumulatedSeconds;
+        }
     };
 
     if (loading) {
@@ -150,143 +197,149 @@ export default function PainelAgentes() {
                     <Flex p="6" borderBottomWidth="1px" borderColor="gray.100" justifyContent="space-between" alignItems="center">
                         <Heading size="md" color="gray.800">Status dos Agentes</Heading>
                         <Box position="relative">
-                            <Box as="button" p={2} borderRadius="md" _hover={{ bg: "gray.100" }} color={roleFilter ? "blue.500" : "gray.600"}>
+                            <Box
+                                as="button"
+                                p={2}
+                                borderRadius="md"
+                                _hover={{ bg: "gray.100" }}
+                                color={roleFilters.length > 0 ? "blue.500" : "gray.600"}
+                                onClick={() => setIsFilterMenuOpen(!isFilterMenuOpen)}
+                                title="Filtrar por função"
+                            >
                                 <ListFilter size={20} />
                             </Box>
-                            <NativeSelect.Root position="absolute" top={0} left={0} w="100%" h="100%" opacity={0}>
-                                <NativeSelect.Field cursor="pointer" onChange={(e) => setRoleFilter(e.target.value)} value={roleFilter}>
-                                    <option value="">Todas as Funções</option>
-                                    {[...new Set(agents.map(a => a.agentRole).filter(Boolean))].map(role => (
-                                        <option key={role} value={role}>{role}</option>
-                                    ))}
-                                </NativeSelect.Field>
-                            </NativeSelect.Root>
+                            {isFilterMenuOpen && (
+                                <>
+                                    <Box
+                                        position="fixed" top={0} left={0} right={0} bottom={0}
+                                        zIndex="99"
+                                        onClick={() => setIsFilterMenuOpen(false)}
+                                    />
+                                    <Card.Root
+                                        position="absolute" top="100%" right={0} mt="2" minW="220px"
+                                        zIndex="100" boxShadow="xl" p="4" bg="white" border="1px solid" borderColor="gray.200"
+                                    >
+                                        <Stack gap="3">
+                                            <Text fontSize="sm" fontWeight="bold" color="gray.700" borderBottomWidth="1px" pb="2">
+                                                Filtrar Funções
+                                            </Text>
+                                            <Stack gap="2" maxH="200px" overflowY="auto">
+                                                {[...new Set(agents.map(a => a.agentRole).filter(Boolean))].map(role => (
+                                                    <Flex as="label" key={role} align="center" gap="2" cursor="pointer" _hover={{ bg: "gray.50" }} p="1" borderRadius="md">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={roleFilters.includes(role)}
+                                                            onChange={() => toggleRoleFilter(role)}
+                                                            style={{ cursor: "pointer" }}
+                                                        />
+                                                        <Text fontSize="sm" color="gray.700" userSelect="none">{role}</Text>
+                                                    </Flex>
+                                                ))}
+                                            </Stack>
+                                            {roleFilters.length > 0 && (
+                                                <Button size="xs" variant="surface" colorPalette="red" onClick={() => setRoleFilters([])} mt="2" w="full">
+                                                    Limpar Filtros
+                                                </Button>
+                                            )}
+                                        </Stack>
+                                    </Card.Root>
+                                </>
+                            )}
                         </Box>
                     </Flex>
+
                     <Box overflowX="auto">
-                        <Table.Root variant="line">
+                        <Table.Root variant="line" size="sm">
                             <Table.Header bg="gray.50">
                                 <Table.Row>
-                                    <Table.ColumnHeader color="blue.800">Agente</Table.ColumnHeader>
-                                    <Table.ColumnHeader color="purple.800">Função</Table.ColumnHeader>
-                                    <Table.ColumnHeader color="green.800">Recebidas</Table.ColumnHeader>
-                                    <Table.ColumnHeader color="orange.900">Tempo Pausa</Table.ColumnHeader>
-                                    <Table.ColumnHeader color="yellow.700">Tempo Ligação</Table.ColumnHeader>
-                                    <Table.ColumnHeader color="teal.700">Removidos</Table.ColumnHeader>
-                                    <Table.ColumnHeader color="teal.700">Ações</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="gray.800" fontWeight="700" letterSpacing="0.1em" py="2" pl="4">Agente</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="gray.800" fontWeight="700" letterSpacing="0.1em" py="2">Função</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="blue.600" fontWeight="700" letterSpacing="0.1em" py="2">Recebidas</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="yellow.600" fontWeight="700" letterSpacing="0.1em" py="2">Pausas</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="orange.700" fontWeight="700" letterSpacing="0.1em" py="2">Tempo Pausa</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="green.700" fontWeight="700" letterSpacing="0.1em" py="2">Tempo Ligação</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="purple.700" fontWeight="700" letterSpacing="0.1em" py="2">Tempo Livre</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="red.700" fontWeight="700" letterSpacing="0.1em" py="2">Removidos</Table.ColumnHeader>
+                                    <Table.ColumnHeader color="gray.800" fontWeight="700" letterSpacing="0.1em" py="2">Ações</Table.ColumnHeader>
                                 </Table.Row>
                             </Table.Header>
                             <Table.Body>
-                                {filteredAgents.map((agent) => (
-                                    <Table.Row key={agent.id} _hover={{ bg: "gray.50" }}>
-                                        <Table.Cell fontWeight="bold" color="gray.700">{agent.nomeAgente.toUpperCase()}</Table.Cell>
-                                        <Table.Cell color="gray.700">{agent.agentRole}</Table.Cell>
-                                        <Table.Cell><Badge colorPalette="blue" variant="subtle">{agent.chamadasRecebidasTotal}</Badge></Table.Cell>
-                                        <Table.Cell color="gray.700">{formatTime(agent.tempoTotalPausaSegundos)}</Table.Cell>
-                                        <Table.Cell color="gray.700">{formatTime(agent.tempoTotalLigacaoSegundos)}</Table.Cell>
-                                        <Table.Cell><Badge colorPalette="red" variant="subtle">{agent.removido}</Badge></Table.Cell>
-                                        <Table.Cell>
-                                            <IconButton
-                                                aria-label="Ver detalhes"
-                                                variant="ghost"
-                                                colorPalette="blue"
-                                                onClick={() => handleOpenDetails(agent)}
-                                            >
-                                                <Info size={18} />
-                                            </IconButton>
-                                        </Table.Cell>
-                                    </Table.Row>
-                                ))}
+                                {filteredAgents.map((agent) => {
+                                    const isOnCall = agent.ultimoStatusRamal === 1;
+                                    const isOnPause = agent.ultimoStatusAcd === 5;
+                                    const isRinging = agent.ultimoStatusRamal === 8;
+                                    const isFree = agent.ultimoStatusRamal === 0 && !isOnPause;
+
+                                    const statusColor = isOnCall ? "red.700" : isRinging ? "yellow.600" : isOnPause ? "gray.500" : isFree ? "green.800" : "gray.500";
+                                    const statusDot = isOnCall ? "●" : isRinging ? "◉" : isOnPause ? "○" : "●";
+
+                                    const liveLigacao = getLiveTime(agent.tempoTotalLigacaoSegundos, agent.mudancaRamal, isOnCall);
+                                    const livePausa = getLiveTime(agent.tempoTotalPausaSegundos, agent.mudancaRamal, isOnPause);
+                                    const liveLivre = getLiveTime(agent.tempoTotalLivreSegundos, agent.mudancaRamal, isFree);
+
+                                    return (
+                                        <Table.Row key={agent.id} _hover={{ bg: "gray.100" }} _even={{ bg: "gray.50" }} _odd={{ bg: "white" }}>
+                                            <Table.Cell py="1.5" pl="4">
+                                                <Flex align="center" gap="2">
+                                                    <Text as="span" color={statusColor} fontSize="30px" fontWeight="700" title={isOnCall ? "Em ligação" : isRinging ? "Tocando" : isOnPause ? "Em pausa" : "Livre"}>
+                                                        {statusDot}
+                                                    </Text>
+                                                    <Text fontSize="18px" fontWeight="600" letterSpacing="0.03em" whiteSpace="nowrap">
+                                                        {agent.nomeAgente.toUpperCase()}
+                                                    </Text>
+                                                </Flex>
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5">
+                                                <Text fontSize="16px" color="gray.800" fontWeight="600">{agent.agentRole}</Text>
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5" textAlign="center">
+                                                <Text fontSize="20px" fontWeight="700" color="blue.600" fontFamily="mono">{agent.chamadasRecebidasTotal}</Text>
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5" textAlign="center" cursor="pointer" onClick={() => handleOpenPauseDetails(agent)}>
+                                                <Text fontSize="20px" fontWeight="700" color="yellow.600" fontFamily="mono" _hover={{ textDecoration: "underline" }}>
+                                                    {agent.pausasIniciadasTotal}
+                                                </Text>
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5" textAlign="center" cursor="pointer" onClick={() => handleOpenPauseDetails(agent)}>
+                                                <Text fontSize="20px" fontWeight="600" color={livePausa > 0 ? "orange.700" : "gray.800"} fontFamily="mono" _hover={{ textDecoration: "underline" }}>
+                                                    {formatTime(livePausa)}
+                                                </Text>
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5" textAlign="center">
+                                                <Text fontSize="20px" fontWeight="600" color={liveLigacao > 0 ? "green.700" : "gray.800"} fontFamily="mono">
+                                                    {formatTime(liveLigacao)}
+                                                </Text>
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5" textAlign="center">
+                                                <Text fontSize="20px" fontWeight="600" color={liveLivre > 0 ? "purple.700" : "gray.800"} fontFamily="mono">
+                                                    {formatTime(liveLivre)}
+                                                </Text>
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5" textAlign="center">
+                                                {agent.removido > 0
+                                                    ? <Text fontSize="20px" fontWeight="700" color="red.700" fontFamily="mono">{agent.removido}</Text>
+                                                    : <Text fontSize="20px" fontWeight="700" color="red.700" fontFamily="mono">0</Text>
+                                                }
+                                            </Table.Cell>
+                                            <Table.Cell py="1.5" pr="4" textAlign="center">
+                                                <IconButton aria-label="Ver detalhes" variant="ghost" size="xs" color="gray.500" _hover={{ color: "blue.300", bg: "gray.700" }} onClick={() => handleOpenDetails(agent)}>
+                                                    <Info size={14} />
+                                                </IconButton>
+                                            </Table.Cell>
+                                        </Table.Row>
+                                    );
+                                })}
                             </Table.Body>
                         </Table.Root>
                     </Box>
                 </Card.Root>
             </Box>
 
-            {/* Modal (Dialog) v3 Corrigido */}
-            <DialogRoot
-                open={isDialogOpen}
-                onOpenChange={(e) => setIsDialogOpen(e.open)}
-                size="lg"
-                placement="center"
-                motionPreset="slide-in-bottom"
-            >
-                <Portal>
-                    <DialogBackdrop bg="blackAlpha.600" />
-                    <DialogContent
-                        bg="white"
-                        color="gray.800"
-                        borderRadius="xl"
-                        boxShadow="2xl"
-                        position="fixed"
-                        top="50%"
-                        left="50%"
-                        transform="translate(-50%, -50%)"
-                        zIndex="modal"
-                    >
-                        <DialogHeader borderBottomWidth="1px" py="4">
-                            <DialogTitle fontSize="lg">Detalhamento: {selectedAgent?.nomeAgente}</DialogTitle>
-                        </DialogHeader>
-                        <DialogCloseTrigger color="gray.800" top="4" right="4" />
-                        <DialogBody py="6">
-                            {loadingDetails ? (
-                                <Center py="10"><Spinner /></Center>
-                            ) : (
-                                <Stack gap="6">
-                                    {firstLastCalls && (
-                                        <Box p="4" bg="blue.50" borderRadius="lg" borderLeft="4px solid" borderColor="blue.500">
-                                            <Heading size="xs" mb="3" color="blue.800" display="flex" alignItems="center">
-                                                <Clock size={14} style={{ marginRight: '6px' }} /> Resumo da Operação
-                                            </Heading>
-                                            <Grid templateColumns="1fr 1fr" gap="4">
-                                                <Box>
-                                                    <Text fontSize="xs" fontWeight="bold" color="gray.500">PRIMEIRA LIGAÇÃO</Text>
-                                                    <Text fontSize="sm" fontWeight="medium">
-                                                        {firstLastCalls.frist ? new Date(firstLastCalls.frist.timestamp).toLocaleString('pt-BR') : "N/A"}
-                                                    </Text>
-                                                </Box>
-                                                <Box>
-                                                    <Text fontSize="xs" fontWeight="bold" color="gray.500">ÚLTIMA LIGAÇÃO</Text>
-                                                    <Text fontSize="sm" fontWeight="medium">
-                                                        {firstLastCalls.last ? new Date(firstLastCalls.last.timestamp).toLocaleString('pt-BR') : "N/A"}
-                                                    </Text>
-                                                </Box>
-                                            </Grid>
-                                        </Box>
-                                    )}
-                                    <Separator />
-                                    <Box>
-                                        <Heading size="xs" mb="3" color="gray.700">Histórico Completo</Heading>
-                                        <Box maxH="300px" overflowY="auto">
-                                            <Table.Root variant="line" size="sm">
-                                                <Table.Header bg="gray.50">
-                                                    <Table.Row>
-                                                        <Table.ColumnHeader fontWeight={"bold"}>Nº Telefone</Table.ColumnHeader>
-                                                        <Table.ColumnHeader fontWeight={"bold"}>Horário</Table.ColumnHeader>
-                                                    </Table.Row>
-                                                </Table.Header>
-                                                <Table.Body>
-                                                    {agentCalls.length > 0 ? agentCalls.map((call, i) => (
-                                                        <Table.Row key={i}>
-                                                            <Table.Cell>{call.callerIdRAni}</Table.Cell>
-                                                            <Table.Cell>{new Date(call.timestamp).toLocaleString('pt-BR')}</Table.Cell>
-                                                        </Table.Row>
-                                                    )) : (
-                                                        <Table.Row><Table.Cell colSpan={2} textAlign="center">Nenhum registro.</Table.Cell></Table.Row>
-                                                    )}
-                                                </Table.Body>
-                                            </Table.Root>
-                                        </Box>
-                                    </Box>
-                                </Stack>
-                            )}
-                        </DialogBody>
-                        <DialogFooter borderTopWidth="1px" py="3">
-                            <Button onClick={() => setIsDialogOpen(false)} colorPalette="blue" variant="solid">Fechar</Button>
-                        </DialogFooter>
-                    </DialogContent>
-                </Portal>
-            </DialogRoot>
+            {/* Modal principal (ligações + pausas) */}
+            <CallsDialogs isDialogOpen={isDialogOpen} setIsDialogOpen={setIsDialogOpen} selectedAgent={selectedAgent} />
+
+            {/* Novo modal exclusivo para pausas */}
+            <PauseDialog isPauseDialogOpen={isPauseDialogOpen} setIsPauseDialogOpen={setIsPauseDialogOpen} selectedAgentForPauses={selectedAgentForPauses} pauseHistoryLoading={pauseHistoryLoading} pauseHistory={pauseHistory} />
         </Box>
     );
 }
