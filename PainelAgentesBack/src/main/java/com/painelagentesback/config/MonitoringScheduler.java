@@ -43,13 +43,13 @@ public class MonitoringScheduler {
     }
 
     @Scheduled(cron = "0 0 7 * * *")
-    @SchedulerLock(name = "dailyReset_morning", lockAtLeastFor = "PT1M", lockAtMostFor = "PT5M")
+    @SchedulerLock(name = "dailyReset_morning", lockAtLeastFor = "PT2M", lockAtMostFor = "PT10M")
     public void dailyResetMorning() {
         executarReset("7h");
     }
 
     @Scheduled(cron = "0 0 19 * * *")
-    @SchedulerLock(name = "dailyReset_evening", lockAtLeastFor = "PT1M", lockAtMostFor = "PT5M")
+    @SchedulerLock(name = "dailyReset_evening", lockAtLeastFor = "PT2M", lockAtMostFor = "PT10M")
     public void dailyResetEvening() {
         executarReset("19h");
     }
