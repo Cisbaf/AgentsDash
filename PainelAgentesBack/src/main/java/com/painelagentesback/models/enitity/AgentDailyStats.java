@@ -5,6 +5,8 @@ import lombok.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "agent_daily_stats",
@@ -54,6 +56,10 @@ public class AgentDailyStats {
     private LocalDateTime ultimaAtualizacao;
 
     private LocalDateTime ultimaMudancaStatus;
+
+    @JoinColumn
+    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<CallDetail> ligacoes = new ArrayList<>();
 
     private int removidos;
 }

@@ -4,7 +4,6 @@ import com.painelagentesback.models.enitity.CallDetail;
 import lombok.*;
 
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -38,5 +37,7 @@ public class AgentStatus {
     private LocalDateTime callStartTime;
     private LocalDateTime pendingEncerramento;
     private LocalDateTime mudancaRamal;
+    private LocalDateTime lastActivityTime;
+
 
 }

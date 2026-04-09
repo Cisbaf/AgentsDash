@@ -12,9 +12,12 @@ import com.painelagentesback.service.clients.ConsultaClient;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.*;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -40,6 +43,13 @@ public class AgentStatusService {
 
     // ─── Scheduler e caches ──────────────────────────────────────────────────────
 
+    /**
+     * Flag que indica que um reset diário está em andamento.
+     * Enquanto {@code true}, {@link #persistCurrentState()} é ignorado para evitar
+     * que o persistidor re-grave dados antigos sobre um banco recém-zerado.
+     */
+    private volatile boolean resetting = false;
+
     private final ScheduledExecutorService scheduler =
             new ScheduledThreadPoolExecutor(Runtime.getRuntime().availableProcessors() * 2);
 
@@ -59,14 +69,24 @@ public class AgentStatusService {
     // Máximo de rechecks durante a janela morta de roteamento (10s cada → 80s total)
     private static final int MAX_TENTATIVAS_TRANSITO = 8;
 
-    /** Duração mínima (segundos) para uma ligação ser confirmada como atendida.
-     *  Abaixo disso é tratada como "atendimento curto" e entra no fluxo pós-curto. */
+    /**
+     * Duração mínima (segundos) para uma ligação ser confirmada como atendida.
+     * Abaixo disso é tratada como "atendimento curto" e entra no fluxo pós-curto.
+     */
     private static final long MIN_DURACAO_CONFIRMACAO_SEGUNDOS = 3;
     // ─── Entry point ─────────────────────────────────────────────────────────────
 
     public void updateAgentStatus(AgentsApi dto) {
         if (dto.getStatus() == 0) return;
-        AgentStatus agent = agents.computeIfAbsent(dto.getId(), k -> new AgentStatus());
+        AgentStatus agent = agents.computeIfAbsent(dto.getId(), k -> {
+            // Inicializa o estado anterior com o valor ATUAL da API.
+            // Sem isso, prevAcd=0 e currAcd=5 (pausa ativa) na primeira iteração
+            // após um reset dispara uma contagem falsa de pausa para agentes 24h.
+            AgentStatus novo = new AgentStatus();
+            novo.setUltimoStatusAcd(dto.getStatus());
+            novo.setUltimoStatusRamal(dto.getSTATUS_());
+            return novo;
+        });
         synchronized (agent) {
             try {
                 processStatusUpdate(agent, dto);
@@ -95,13 +115,19 @@ public class AgentStatusService {
             return;
         }
 
+        if (currRamal != prevRamal) {
+            agent.setLastActivityTime(now);
+        } else if (agent.getLastActivityTime() != null && Duration.between(agent.getLastActivityTime(), now).getSeconds() >= 2400) {
+            return;
+        }
+
         globalMetricsService.contarChamadas();
 
         if (hasCallerId(callerId) && (currRamal == 8 || currRamal == 1))
             globalMetricsService.trackGlobalCall(callerId, now);
 
         try {
-            acumularTempos(agent, currAcd,currRamal, prevRamal);
+            acumularTempos(agent, currAcd, currRamal, prevRamal);
             processarToque(agent, prevRamal, currRamal, callerId, now);
             processarAtendimento(agent, currRamal, callerId, now);
             contarPausas(agent, prevAcd, currAcd);
@@ -112,6 +138,20 @@ public class AgentStatusService {
         agent.setUltimoStatusAcd(currAcd);
         agent.setUltimoStatusRamal(currRamal);
 //        atualizarMetricasGlobais();
+    }
+
+    @Scheduled(fixedRate = 600000)
+    public void limparAgentesInativos() {
+        LocalDateTime limite = LocalDateTime.now().minusSeconds(2400);
+        agents.entrySet().removeIf(entry -> {
+            AgentStatus agentStatus = entry.getValue();
+            var lastSeen = agentStatus.getLastActivityTime();
+
+            return lastSeen != null && lastSeen.isBefore(limite) &&
+                    entry.getValue().getUltimoStatusRamal() != 1 &&
+                    entry.getValue().getUltimoStatusAcd() != 5;
+        });
+
     }
 
     // ─── Tempos contínuos ────────────────────────────────────────────────────────
@@ -136,12 +176,10 @@ public class AgentStatusService {
         if (ramal == 1) {
             // Está em ligação
             agent.setTempoTotalLigacaoSegundos(agent.getTempoTotalLigacaoSegundos() + segundos);
-        }
-        else if (acd == 5) {
+        } else if (acd == 5) {
             // Está em pausa
             agent.setTempoTotalPausaSegundos(agent.getTempoTotalPausaSegundos() + segundos);
-        }
-        else if (ramal == 0) {
+        } else if (ramal == 0) {
             // Só conta como livre se não estiver em ligação E não estiver em pausa
             agent.setTempoTotalLivreSegundos(agent.getTempoTotalLivreSegundos() + segundos);
         }
@@ -288,7 +326,7 @@ public class AgentStatusService {
                 return;
             }
 
-            boolean naFila    = globalMetricsService.estaCallIdNaFila(callerId);
+            boolean naFila = globalMetricsService.estaCallIdNaFila(callerId);
             boolean temAgente = algumAgenteComCallerId(callerId);
             int maxTentativas = (naFila || temAgente) ? MAX_TENTATIVAS_FILA : MAX_TENTATIVAS_TRANSITO;
 
@@ -338,7 +376,7 @@ public class AgentStatusService {
                 return;
             }
 
-            boolean naFila    = globalMetricsService.estaCallIdNaFila(callerId);
+            boolean naFila = globalMetricsService.estaCallIdNaFila(callerId);
             boolean temAgente = algumAgenteComCallerId(callerId);
             int maxTentativas = (naFila || temAgente) ? MAX_TENTATIVAS_FILA : MAX_TENTATIVAS_TRANSITO;
 
@@ -402,15 +440,14 @@ public class AgentStatusService {
 
     private String defineAgentRole(String id) {
         if (id == null || id.length() <= 11) return "MEDICO";
-        if (id.startsWith("1")) return "TARM";
-        if (id.startsWith("2")) return "FROTA";
-        return "OUTRO";
-    }
 
-//    private void atualizarMetricasGlobais() {
-//        long total = agents.values().stream().mapToLong(AgentStatus::getChamadasRecebidasTotal).sum();
-//        globalMetricsService.addChamadasRecebidas(total);
-//    }
+        return switch (id.charAt(0)) {
+            case '1' -> "TARM";
+            case '2' -> "FROTA";
+            case '3' -> "SUPERVISOR";
+            default -> "OUTRO";
+        };
+    }
 
     // ─── Acesso externo ───────────────────────────────────────────────────────────
 
@@ -447,7 +484,7 @@ public class AgentStatusService {
                     .map(EventDetails::getHistory)
                     .orElse(Collections.emptyList())
                     .stream()
-                    .filter(item -> !"CONFERENCE".equals(item.getType()))
+                    .filter(item -> !item.getDuration().contains("-"))
                     .collect(Collectors.toList());
             return translateHistory(history);
 
@@ -456,27 +493,29 @@ public class AgentStatusService {
         }
     }
 
-    private List<HistoryItem> translateHistory(List<HistoryItem> historyItems){
+    private List<HistoryItem> translateHistory(List<HistoryItem> historyItems) {
         List<HistoryItem> translated = new ArrayList<>();
-        for (var history: historyItems){
-           var newHistory =  HistoryItem
-                   .builder()
-                   .date(history.getDate())
-                   .duration(history.getDuration())
-                   .type(tralatedTypes(history.getType()))
-                   .build();
-           translated.add(newHistory);
+        for (var history : historyItems) {
+            var newHistory = HistoryItem
+                    .builder()
+                    .date(history.getDate())
+                    .duration(history.getDuration())
+                    .type(translatedTypes(history.getType()))
+                    .build();
+            translated.add(newHistory);
         }
         return translated;
     }
-    private String tralatedTypes(String type){
-        return switch (type){
+
+    private String translatedTypes(String type) {
+        return switch (type) {
             case "BREAKFAST" -> "Café da Manhã";
             case "LUNCH" -> "Almoço";
             case "DINNER" -> "Jantar";
             case "AFTERNOON_COFFEE" -> "Café da Tarde";
             case "NIGHT_REST" -> "Descanso Noturno";
             case "BATHROOM_BREAK" -> "Pausa para Banheiro";
+            case "CONFERENCE" -> "Conferência";
             default -> type;
         };
     }
@@ -485,6 +524,12 @@ public class AgentStatusService {
 
     @Transactional
     public void persistCurrentState() {
+        // Não persiste enquanto um reset diário está em andamento para evitar
+        // que dados do turno anterior sejam re-gravados sobre o banco zerado.
+        if (resetting) {
+            log.debug("persistCurrentState ignorado: reset em andamento.");
+            return;
+        }
         LocalDate today = LocalDate.now();
         for (AgentStatus agent : agents.values()) {
             if (agent.getUltimoStatusAcd() == 0) continue;
@@ -503,6 +548,8 @@ public class AgentStatusService {
             stats.setRemovidos(agent.getRemovido());
             stats.setUltimaAtualizacao(LocalDateTime.now());
             stats.setUltimaMudancaStatus(agent.getMudancaRamal());
+            stats.getLigacoes().clear();
+            stats.getLigacoes().addAll(agent.getLigacoes());
             agentStatsRepository.save(stats);
         }
     }
@@ -526,7 +573,15 @@ public class AgentStatusService {
     }
 
     public void resetAllAgentStatuses() {
-        agents.clear();
-        agentStatsRepository.deleteAll();
+        resetting = true;
+        try {
+            agents.clear();
+            agentStatsRepository.deleteAll();
+            log.warn("resetAllAgentStatuses concluído: agents e banco limpos.");
+        } finally {
+            // Libera o flag DEPOIS de limpar, garantindo que persistCurrentState
+            // só volte a funcionar com o estado já zerado.
+            resetting = false;
+        }
     }
 }
