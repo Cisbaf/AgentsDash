@@ -14,9 +14,7 @@ export default function PainelAgentes() {
     const [agents, setAgents] = useState<AgentStatus[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Estados para o modal principal (ligações + pausas)
-    const [pauses, setPauses] = useState<any[]>([]);
-    const [pausesLoading, setPausesLoading] = useState(false);
+    // Estados para o modal principal (ligações)
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [selectedAgent, setSelectedAgent] = useState<AgentStatus | null>(null);
 
@@ -69,22 +67,7 @@ export default function PainelAgentes() {
         }
     };
 
-    // Busca pausas para o modal principal (com ligações)
-    const fetchPausas = async () => {
-        if (!selectedAgent?.id) return;
-        setPausesLoading(true);
-        try {
-            const pausesRes = await fetch(`/api/agents/pauses/${selectedAgent.id}`);
-            if (!pausesRes.ok) throw new Error(`Erro HTTP: ${pausesRes.status}`);
-            const pausesData = await pausesRes.json();
-            setPauses(pausesData);
-        } catch (err) {
-            console.error("Erro ao carregar pausas:", err);
-            setPauses([]);
-        } finally {
-            setPausesLoading(false);
-        }
-    };
+
 
     // Busca pausas para o modal exclusivo
     const fetchPauseHistory = async (agentId: string) => {
@@ -105,7 +88,6 @@ export default function PainelAgentes() {
     const handleOpenDetails = (agent: AgentStatus) => {
         setSelectedAgent(agent);
         setIsDialogOpen(true);
-        fetchPausas();
     };
 
     const handleOpenPauseDetails = (agent: AgentStatus) => {
