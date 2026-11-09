@@ -55,9 +55,7 @@ export default function PainelAgentes() {
                 id: key,
             }));
             setAgents(
-                agentsArray
-                    .filter(a => a.nomeAgente && a.nomeAgente !== "")
-                    .sort((a, b) => a.nomeAgente.localeCompare(b.nomeAgente))
+                agentsArray.filter(a => a.nomeAgente && a.nomeAgente !== "")
             );
         } catch (err) {
             console.error("Erro ao carregar dados:", err);
@@ -91,6 +89,7 @@ export default function PainelAgentes() {
     };
 
     const handleOpenPauseDetails = (agent: AgentStatus) => {
+        setPauseHistory([]); // Limpa histórico anterior para evitar flicker
         setSelectedAgentForPauses(agent);
         setIsPauseDialogOpen(true);
         fetchPauseHistory(agent.id!);
