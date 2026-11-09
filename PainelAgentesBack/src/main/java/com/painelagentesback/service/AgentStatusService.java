@@ -9,9 +9,11 @@ import com.painelagentesback.models.enitity.CallDetail;
 import com.painelagentesback.models.utils.AgentStatus;
 import com.painelagentesback.repository.AgentDailyStatsRepository;
 import com.painelagentesback.service.clients.ConsultaClient;
+import jakarta.annotation.PreDestroy;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -63,17 +65,36 @@ public class AgentStatusService {
     private final Cache<String, Boolean> processedAsAbandoned = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofMinutes(5)).maximumSize(10_000).build();
 
+    // Garante que o mesmo agente não ganhe dois removidos para a mesma chamada
+    private final Cache<String, Boolean> processedAsRemovido = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(10)).maximumSize(10_000).build();
+
     // Máximo de rechecks enquanto a chamada ainda está na fila ou com agente (10s cada → 100s total)
-    private static final int MAX_TENTATIVAS_FILA = 15;
+    @Value("${painel.desfecho.max-tentativas-fila:15}")
+    private int maxTentativasFila = 15;
 
     // Máximo de rechecks durante a janela morta de roteamento (10s cada → 80s total)
-    private static final int MAX_TENTATIVAS_TRANSITO = 8;
+    @Value("${painel.desfecho.max-tentativas-transito:8}")
+    private int maxTentativasTransito = 8;
 
     /**
      * Duração mínima (segundos) para uma ligação ser confirmada como atendida.
      * Abaixo disso é tratada como "atendimento curto" e entra no fluxo pós-curto.
      */
-    private static final long MIN_DURACAO_CONFIRMACAO_SEGUNDOS = 3;
+    @Value("${painel.atendimento.min-confirmacao-segundos:3}")
+    private long minDuracaoConfirmacaoSegundos = 3;
+
+    // Primeira verificação após o fim do toque / atendimento curto
+    @Value("${painel.desfecho.delay-inicial-segundos:15}")
+    private long delayInicialSegundos = 15;
+
+    // Intervalo entre rechecks
+    @Value("${painel.desfecho.intervalo-recheck-segundos:10}")
+    private long intervaloRecheckSegundos = 10;
+
+    // Tempo fora do ramal 1 para considerar que o atendimento realmente encerrou
+    @Value("${painel.atendimento.tolerancia-encerramento-segundos:2}")
+    private long toleranciaEncerramentoSegundos = 2;
     // ─── Entry point ─────────────────────────────────────────────────────────────
 
     public void updateAgentStatus(AgentsApi dto) {
@@ -235,7 +256,7 @@ public class AgentStatusService {
                 agent.setPendingEncerramento(now);
             } else if (agent.getPendingEncerramento() != null) {
                 long segundosForaDoRamal = Duration.between(agent.getPendingEncerramento(), now).getSeconds();
-                if (segundosForaDoRamal >= 2) {
+                if (segundosForaDoRamal >= toleranciaEncerramentoSegundos) {
                     LocalDateTime momentoEncerramento = agent.getPendingEncerramento();
                     agent.setPendingEncerramento(null);
                     encerrarAtendimento(agent, momentoEncerramento);
@@ -259,11 +280,11 @@ public class AgentStatusService {
 
         } else if (!agent.isAttendanceRegistered()) {
             // Aguardando os 3s de confirmação
-            if (Duration.between(agent.getCallAnsweredTime(), now).getSeconds() >= MIN_DURACAO_CONFIRMACAO_SEGUNDOS) {
+            if (Duration.between(agent.getCallAnsweredTime(), now).getSeconds() >= minDuracaoConfirmacaoSegundos) {
                 String id = agent.getLastAnsweredCallerId();
                 globalMetricsService.registrarAtendimento(id, agent.getCallAnsweredTime());
                 globalMetricsService.addCallDetails(id, now);
-                globalMetricsService.registrarAtendimentoConfirmado(id, now);
+                globalMetricsService.registrarAtendimentoConfirmado(id, agent.getId(), now);
                 agent.getLigacoes().add(new CallDetail(id, now));
                 agent.setAttendanceRegistered(true);
                 log.info("[ATENDIMENTO-CONFIRMADO] {} → {}", id, agent.getNomeAgente());
@@ -304,8 +325,8 @@ public class AgentStatusService {
     //
     // Fluxo: agente perdeu chamada no toque (8→0).
     // Verifica se outro agente atendeu e confirmou depois → removido.
-    // Se não: recheck enquanto na fila ou com agente (MAX_TENTATIVAS_FILA).
-    //         sem fila e sem agente → janela de trânsito (MAX_TENTATIVAS_TRANSITO).
+    // Se não: recheck enquanto na fila ou com agente (maxTentativasFila).
+    //         sem fila e sem agente → janela de trânsito (maxTentativasTransito).
     //         esgotado → abandonada.
 
     private void agendarVerificacaoDesfecho(AgentStatus agent, String callerId, LocalDateTime eventTime) {
@@ -313,27 +334,38 @@ public class AgentStatusService {
         if (pendingCallChecks.getIfPresent(key) != null) return;
         pendingCallChecks.put(key, Boolean.TRUE);
         log.info("[DESFECHO-AGENDADO] agente={} callerId={}", agent.getNomeAgente(), callerId);
-        scheduler.schedule(() -> verificarDesfecho(agent, callerId, eventTime, key, 1), 15, TimeUnit.SECONDS);
+        scheduler.schedule(() -> verificarDesfecho(agent, callerId, eventTime, key, 1), delayInicialSegundos, TimeUnit.SECONDS);
     }
 
     private void verificarDesfecho(AgentStatus agent, String callerId, LocalDateTime eventTime, String key, int tentativa) {
         boolean encerrou = false;
         try {
-            if (globalMetricsService.wasAttendedAfter(callerId, eventTime)) {
-                agent.setRemovido(agent.getRemovido() + 1);
-                log.warn("\n[REMOVIDO] agente={} callerId={}", agent.getNomeAgente(), callerId);
+            // Oscilação do ramal (8→0→1): o próprio agente atendeu a chamada. Não é removido nem abandono
+            // (se a chamada cair depois, o fluxo de atendimento curto/pós-curto cuida disso).
+            if (agenteAtendeuAChamada(agent, callerId, eventTime)) {
+                log.info("[DESFECHO-ATENDIDA-PELO-PROPRIO] agente={} callerId={}", agent.getNomeAgente(), callerId);
+                encerrou = true;
+                return;
+            }
+
+            if (globalMetricsService.wasAttendedAfter(callerId, eventTime, agent.getId())) {
+                if (processedAsRemovido.asMap().putIfAbsent(key, Boolean.TRUE) == null) {
+                    agent.setRemovido(agent.getRemovido() + 1);
+                    log.warn("\n[REMOVIDO] agente={} callerId={}", agent.getNomeAgente(), callerId);
+                    persistirSemFalhar();
+                }
                 encerrou = true;
                 return;
             }
 
             boolean naFila = globalMetricsService.estaCallIdNaFila(callerId);
             boolean temAgente = algumAgenteComCallerId(callerId);
-            int maxTentativas = (naFila || temAgente) ? MAX_TENTATIVAS_FILA : MAX_TENTATIVAS_TRANSITO;
+            int maxTentativas = (naFila || temAgente) ? maxTentativasFila : maxTentativasTransito;
 
             if (tentativa < maxTentativas) {
                 String motivo = temAgente ? "AGUARDANDO-AGENTE" : naFila ? "AGUARDANDO-FILA" : "AGUARDANDO-TRANSITO";
                 log.info("[DESFECHO-{}] callerId={} tentativa={}/{}", motivo, callerId, tentativa, maxTentativas);
-                scheduler.schedule(() -> verificarDesfecho(agent, callerId, eventTime, key, tentativa + 1), 10, TimeUnit.SECONDS);
+                scheduler.schedule(() -> verificarDesfecho(agent, callerId, eventTime, key, tentativa + 1), intervaloRecheckSegundos, TimeUnit.SECONDS);
                 return;
             }
 
@@ -353,8 +385,8 @@ public class AgentStatusService {
     // Fluxo: agente atendeu brevemente (< 15s).
     // Se wasAttendedAfter=true (qualquer agente confirmou atendimento depois) → não é abandono.
     //   Isso cobre repasses TARM→TARM e TARM→MÉDICO (quando médico gera evento de confirmação).
-    // Se não: recheck enquanto na fila ou com agente (MAX_TENTATIVAS_FILA).
-    //         sem fila e sem agente → janela de trânsito (MAX_TENTATIVAS_TRANSITO).
+    // Se não: recheck enquanto na fila ou com agente (maxTentativasFila).
+    //         sem fila e sem agente → janela de trânsito (maxTentativasTransito).
     //         esgotado → abandono.
     //   Nota: falso positivo possível em transferências para médico sem evento de confirmação.
     //   Nesses casos, corrigir manualmente decrementando o contador de abandonadas.
@@ -364,7 +396,7 @@ public class AgentStatusService {
         if (pendingCallChecks.getIfPresent(key) != null) return;
         pendingCallChecks.put(key, Boolean.TRUE);
         log.info("[POS-CURTO-AGENDADO] callerId={}", callerId);
-        scheduler.schedule(() -> verificarPosCurto(callerId, eventTime, key, 1), 15, TimeUnit.SECONDS);
+        scheduler.schedule(() -> verificarPosCurto(callerId, eventTime, key, 1), delayInicialSegundos, TimeUnit.SECONDS);
     }
 
     private void verificarPosCurto(String callerId, LocalDateTime eventTime, String key, int tentativa) {
@@ -378,12 +410,12 @@ public class AgentStatusService {
 
             boolean naFila = globalMetricsService.estaCallIdNaFila(callerId);
             boolean temAgente = algumAgenteComCallerId(callerId);
-            int maxTentativas = (naFila || temAgente) ? MAX_TENTATIVAS_FILA : MAX_TENTATIVAS_TRANSITO;
+            int maxTentativas = (naFila || temAgente) ? maxTentativasFila : maxTentativasTransito;
 
             if (tentativa < maxTentativas) {
                 String motivo = temAgente ? "AGUARDANDO-AGENTE" : naFila ? "AGUARDANDO-FILA" : "AGUARDANDO-TRANSITO";
                 log.info("[POS-CURTO-{}] callerId={} tentativa={}/{}", motivo, callerId, tentativa, maxTentativas);
-                scheduler.schedule(() -> verificarPosCurto(callerId, eventTime, key, tentativa + 1), 10, TimeUnit.SECONDS);
+                scheduler.schedule(() -> verificarPosCurto(callerId, eventTime, key, tentativa + 1), intervaloRecheckSegundos, TimeUnit.SECONDS);
                 return;
             }
 
@@ -406,9 +438,19 @@ public class AgentStatusService {
             processedAsAbandoned.put(callerId, Boolean.TRUE);
             globalMetricsService.incrementChamadasAbandonadas();
             log.warn("\n{} callerId={} origem={} tentativas={}\n", logTag, callerId, origem, tentativas);
+            try {
+                globalMetricsService.persistCurrentState();
+            } catch (Exception e) {
+                log.error("[PERSIST-ERRO] {}", e.getMessage(), e);
+            }
         } else {
             log.warn("[ABANDONADA-SKIP] callerId={} já contabilizada.", callerId);
         }
+    }
+
+    private boolean agenteAtendeuAChamada(AgentStatus agent, String callerId, LocalDateTime since) {
+        return (agent.getCallAnsweredTime() != null && callerId.equals(agent.getLastAnsweredCallerId()))
+                || globalMetricsService.wasAttendedBy(callerId, since, agent.getId());
     }
 
     // Retorna true se algum agente está atendendo OU com a chamada tocando agora
@@ -521,6 +563,22 @@ public class AgentStatusService {
     }
 
     // ─── Persistência ────────────────────────────────────────────────────────────
+
+    // Eventos raros (removido/abandonada) são gravados na hora para não se perderem em um crash
+    private void persistirSemFalhar() {
+        try {
+            persistCurrentState();
+        } catch (Exception e) {
+            log.error("[PERSIST-ERRO] {}", e.getMessage(), e);
+        }
+    }
+
+    // Shutdown limpo: grava o estado e descarta verificações pendentes (que são só em memória)
+    @PreDestroy
+    void onShutdown() {
+        persistirSemFalhar();
+        scheduler.shutdownNow();
+    }
 
     @Transactional
     public void persistCurrentState() {

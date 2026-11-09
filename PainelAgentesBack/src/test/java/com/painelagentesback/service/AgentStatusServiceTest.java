@@ -14,7 +14,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -51,6 +53,8 @@ class AgentStatusServiceTest {
 
     @BeforeEach
     void setUp() {
+        // O scheduler é criado dentro do service; troca pelo mock para observar os agendamentos
+        ReflectionTestUtils.setField(agentStatusService, "scheduler", scheduler);
         baseDto = new AgentsApi();
         baseDto.setId("123456789012"); // TARM
         baseDto.setNAgente("Agente Teste");
@@ -220,7 +224,7 @@ class AgentStatusServiceTest {
             agentStatusService.updateAgentStatus(baseDto);
 
             assertTrue(agent.isAttendanceRegistered());
-            verify(globalMetricsService).registrarAtendimentoConfirmado(anyString(), any());
+            verify(globalMetricsService).registrarAtendimentoConfirmado(anyString(), any(), any());
         }
 
         @Test
@@ -250,6 +254,79 @@ class AgentStatusServiceTest {
             assertNull(agent.getCallAnsweredTime());
             // Deve agendar verificação pós-curto
             verify(scheduler).schedule(any(Runnable.class), eq(15L), eq(TimeUnit.SECONDS));
+        }
+    }
+
+    @Nested
+    @DisplayName("Testes de Removido")
+    class RemovidoTests {
+
+        private AgentStatus agentQuePerdeuToque() {
+            baseDto.setSTATUS_(0);
+            agentStatusService.updateAgentStatus(baseDto);
+            baseDto.setSTATUS_(8);
+            agentStatusService.updateAgentStatus(baseDto);
+            baseDto.setSTATUS_(0);
+            agentStatusService.updateAgentStatus(baseDto);
+            return agentStatusService.getAllAgentStatuses().get(baseDto.getId());
+        }
+
+        private Runnable verificacaoAgendada() {
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(scheduler).schedule(captor.capture(), eq(15L), eq(TimeUnit.SECONDS));
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("Conta removido quando outro agente atendeu depois do toque")
+        void shouldCountRemovidoWhenAnotherAgentAnswered() {
+            AgentStatus agent = agentQuePerdeuToque();
+            when(globalMetricsService.wasAttendedAfter(eq(baseDto.getCallerIdRAni()), any(), eq(baseDto.getId())))
+                    .thenReturn(true);
+
+            verificacaoAgendada().run();
+
+            assertEquals(1, agent.getRemovido());
+        }
+
+        @Test
+        @DisplayName("Não conta removido quando só o próprio agente atendeu depois")
+        void shouldNotCountRemovidoWhenOnlyTheAgentItselfAnswered() {
+            AgentStatus agent = agentQuePerdeuToque();
+            // wasAttendedAfter ignora o próprio agente (excludeAgentId) → false
+            when(globalMetricsService.wasAttendedAfter(anyString(), any(), eq(baseDto.getId()))).thenReturn(false);
+            when(globalMetricsService.estaCallIdNaFila(anyString())).thenReturn(true);
+
+            verificacaoAgendada().run();
+
+            assertEquals(0, agent.getRemovido());
+        }
+
+        @Test
+        @DisplayName("Não conta removido nem abandonada quando o próprio agente atendeu (oscilação 8→0→1)")
+        void shouldIgnoreWhenAgentItselfAnswered() {
+            AgentStatus agent = agentQuePerdeuToque();
+            when(globalMetricsService.wasAttendedBy(eq(baseDto.getCallerIdRAni()), any(), eq(baseDto.getId())))
+                    .thenReturn(true);
+
+            verificacaoAgendada().run();
+
+            assertEquals(0, agent.getRemovido());
+            verify(globalMetricsService, never()).incrementChamadasAbandonadas();
+            verify(scheduler, times(1)).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
+        }
+
+        @Test
+        @DisplayName("Não conta removido duas vezes para a mesma chamada")
+        void shouldNotCountRemovidoTwiceForSameCall() {
+            AgentStatus agent = agentQuePerdeuToque();
+            when(globalMetricsService.wasAttendedAfter(anyString(), any(), anyString())).thenReturn(true);
+
+            Runnable verificacao = verificacaoAgendada();
+            verificacao.run();
+            verificacao.run();
+
+            assertEquals(1, agent.getRemovido());
         }
     }
 

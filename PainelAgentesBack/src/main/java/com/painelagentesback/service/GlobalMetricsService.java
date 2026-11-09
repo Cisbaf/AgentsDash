@@ -1,5 +1,7 @@
 package com.painelagentesback.service;
 
+import java.util.List;
+import java.util.ArrayList;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.painelagentesback.models.enitity.GlobalDailyStats;
@@ -36,7 +38,10 @@ public class GlobalMetricsService {
             .recordStats()         // opcional: para monitoramento
             .build();
 
-    private final Cache<String, LocalDateTime> confirmedAttendances = Caffeine.newBuilder()
+    private record ConfirmedAttendance(String agentId, LocalDateTime at) {}
+
+    // Todas as confirmações recentes por callerId (um agente que confirma depois não apaga a de outro)
+    private final Cache<String, List<ConfirmedAttendance>> confirmedAttendances = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofMinutes(10))
             .maximumSize(50_000)
             .build();
@@ -60,9 +65,13 @@ public class GlobalMetricsService {
         globalMetrics.setTotalChamadasAtendidas(total - globalMetrics.getChamadasAbandonadas());
     }
 
-    public void registrarAtendimentoConfirmado(String callerId, LocalDateTime answeredAt) {
+    public void registrarAtendimentoConfirmado(String callerId, String agentId, LocalDateTime answeredAt) {
         if (callerId != null && !callerId.isEmpty()) {
-            confirmedAttendances.put(callerId, answeredAt);
+            confirmedAttendances.asMap().compute(callerId, (k, list) -> {
+                List<ConfirmedAttendance> novo = list == null ? new ArrayList<>() : new ArrayList<>(list);
+                novo.add(new ConfirmedAttendance(agentId, answeredAt));
+                return novo;
+            });
             log.debug("Chamada {} confirmada como atendimento real em {}", callerId, answeredAt);
         }
     }
@@ -140,8 +149,21 @@ public class GlobalMetricsService {
 
     // Verifica se uma chamada foi atendida após um determinado instante
     public boolean wasAttendedAfter(String callerId, LocalDateTime since) {
-        LocalDateTime t = confirmedAttendances.getIfPresent(callerId);
-        return t != null && t.isAfter(since);
+        return wasAttendedAfter(callerId, since, null);
+    }
+
+    // True se o próprio agente confirmou atendimento desse callerId depois de since
+    public boolean wasAttendedBy(String callerId, LocalDateTime since, String agentId) {
+        List<ConfirmedAttendance> list = confirmedAttendances.getIfPresent(callerId);
+        return list != null && agentId != null && list.stream()
+                .anyMatch(c -> c.at().isAfter(since) && agentId.equals(c.agentId()));
+    }
+
+    // Ignora atendimentos confirmados por excludeAgentId (o próprio agente não "remove" a si mesmo)
+    public boolean wasAttendedAfter(String callerId, LocalDateTime since, String excludeAgentId) {
+        List<ConfirmedAttendance> list = confirmedAttendances.getIfPresent(callerId);
+        return list != null && list.stream().anyMatch(c -> c.at().isAfter(since)
+                && (excludeAgentId == null || !excludeAgentId.equals(c.agentId())));
     }
 
     // Adiciona um callerId ao rastreador global (quando toca ou é atendida)
